@@ -1,6 +1,6 @@
 # EZ-USB&trade; FX2G3: USBHS device application
 
-This application demonstrates the implementation of a vendor-specific USB device implementation that allows testing of data transfers using Bulk, Interrupt, and Iso endpoints on USB 2.0 interfaces.
+This application tests and showcases the implementation of a vendor-specific USB device, utilizing Bulk, Interrupt, and Iso endpoints to facilitate data transfers on USB 2.0 interfaces.
 
 > **Note:** This code example is an alpha release only for EZ-USB&trade; FX2G3 devices.
 
@@ -10,22 +10,28 @@ This application demonstrates the implementation of a vendor-specific USB device
 
 
 ## Requirements
+
 - [ModusToolbox&trade;](https://www.infineon.com/modustoolbox) v3.2 or later (tested with v3.2)
 - Board support package (BSP) minimum required version: 4.3.2
 - Programming language: C
 - Associated parts: [EZ-USB&trade; FX2G3](https://www.infineon.com/cms/en/product/promopages/ez-usb-fx2g3/)
 
+
 ## Supported toolchains (make variable 'TOOLCHAIN')
+
 - GNU Arm&reg; Embedded Compiler v11.3.1 (`GCC_ARM`) – Default value of `TOOLCHAIN`
 - Arm&reg; Compiler v6.16 (`ARM`)
 
+
 ## Supported kits (make variable 'TARGET')
 
-- [EZ-USB&trade; FX2G3 DVK](https://github.com/Infineon/mtb-example-fx2g3-usbhs-device) (`KIT_FX2G3_104LGA`) – Default value of `TARGET`
+- [EZ-USB&trade; FX2G3 DVK](https://www.infineon.com/cms/en/product/promopages/ez-usb-fx2g3/) (`KIT_FX2G3_104LGA`) – Default value of `TARGET`
+
 
 ## Hardware setup
 
 This example uses the board's default configuration. See the kit user guide to ensure that the board is configured correctly.
+
 
 ## Software setup
 
@@ -35,7 +41,9 @@ Install a terminal emulator if you don't have one. Instructions in this document
 
 This example requires no additional software or tools.
 
+
 ## Using the code example
+
 
 ### Create the project
 
@@ -67,6 +75,7 @@ The ModusToolbox&trade; tools package provides the Project Creator as both a GUI
 
 </details>
 
+
 <details><summary><b>Use Project Creator CLI</b></summary>
 
 The 'project-creator-cli' tool can be used to create applications from a CLI terminal or from within batch files or shell scripts. This tool is available in the *{ModusToolbox&trade; install directory}/tools_{version}/project-creator/* directory.
@@ -92,6 +101,7 @@ Argument | Description | Required/optional
 > **Note:** The project-creator-cli tool uses the `git clone` and `make getlibs` commands to fetch the repository and import the required libraries. For details, see the "Project creator tools" section of the [ModusToolbox&trade; tools package user guide](https://www.infineon.com/ModusToolboxUserGuide) (locally available at {ModusToolbox&trade; install directory}/docs_{version}/mtb_user_guide.pdf).
 
 </details>
+
 
 ### Open the project
 
@@ -136,14 +146,14 @@ For more details, see the [ModusToolbox&trade; tools package user guide](https:/
    1. Open **EZ-USB&trade; FX Control Center** application.
 
       The **EZ-USB&trade; FX2G3** device displays as **EZ-USB FX BOOTLOADER**.
-
+      
    2. Navigate to **Device Selection** > **Devices**, select **EZ-USB FX BOOTLOADER**, and then click the **Program** > **Internal Flash** option.
 
-   3. Navigate to the */build/APP_KIT_FX2G3_104LGA/Release/* folder within the CE directory and locate the *.hex* file and program.
+   3. Navigate to the *<CE Title>/build/APP_KIT_FX2G3_104LGA/Release* folder within the CE directory and locate the *.hex* file and program.
+      
+   4. Confirm if the programming is successful in the log window of the application.
 
-      Confirm if the programming is successful in the log window of the application.
-
-4. After programming, the application starts automatically. Confirm that "\<CE Title>" is displayed on the UART terminal.
+4. After programming, the application starts automatically. Confirm that the following title is displayed on the UART terminal.
 
    **Figure 1. Terminal output on program startup**
 
@@ -151,31 +161,35 @@ For more details, see the [ModusToolbox&trade; tools package user guide](https:/
 
    The device will enumerate as a WinUSB device.
 
-5. Open the **EZ-USB&trade; FX Control Center** application and go to **Performance Measurement**/**Data Loopback** tab (based on the compile time option set), and initiate **USB Data** transfers on the selected endpoints.
+5. Open **EZ-USB&trade; FX Control Center** application and go to **Performance Measurement**/**Data Loopback** tab (based on the compile time option set), and initiate **USB Data** transfers on the selected endpoints.
 
-## Logging configurations
-
-By default, the USBFS port is enabled for debug logs.
-To enable debug logs on UART, set **USBFS_LOGS_ENABLE** compiler flag to '0u' in the *makefile*. SCB4 of the FX2G3 device is used as UART with a baud rate of 921,600 to send out the log messages through the P11.0 pin.
 
 ## Debugging
 
-Debug the code example by setting debug levels for the UART logs. Set the **DEBUG_LEVEL** macro in *main.c* file with the following values for debugging.
+By default, the USBFS port is enabled for debug logs.
+
+To enable debug logs on UART, set the **USBFS_LOGS_ENABLE** compiler flag to '0u' in the *makefile*. SCB4 of the EZ-USB&trade; FX2G3 device is used as UART with a baud rate of 921,600 to send out log messages through the P11.0 pin.
+
+Debug the code example by setting debug levels for the UART logs. Set the **DEBUG_LEVEL** macro in the *main.c* file with the following values for debugging.
 
 **Table 1. Debug values**
+
 Macro value     |    Description
 :-------------  | :------------
-1u             | Enable error messages
-2u               | Enable warning messages
-3u             | Enable info messages
-4u                | Enable all messages
+1u              | Enable error messages
+2u              | Enable warning messages
+3u              | Enable info messages
+4u              | Enable all messages
+<br>
+
 
 ## Design and implementation
 
-This code example demonstrates the implementation of the USB loopback and zero device functionality, which can be used to test the USB 2.0 functionality and data transfer performance of the USB interface on FX2G3.
+This code example demonstrates the implementation of the USB loopback and zero device functionality, which can be used to test the USB 2.0 functionality and data transfer performance of the USB interface on EZ-USB&trade; FX2G3.
 This application uses various low-performance peripherals to interface with the system such as:
 
-- Enable debug prints over CDC using USBFS block on FX2G3
+- Enable debug prints over CDC using USBFS block on EZ-USB&trade; FX2G3 device.
+
 
 ### Features of the application
 
@@ -188,19 +202,22 @@ This application uses various low-performance peripherals to interface with the 
    - **Alternate settings 1** - 5 Interrupt endpoint pairs 
    - **Alternate settings 2** - 5 Isochronous endpoint pairs 
 
+
 ### Datapath
+
 - The device enumerates as a vendor specific USB device with one configuration with three alternate settings each, supporting five IN-OUT endpoint pairs.
 - The application supports two modes:
 
    - **Data Loopback:** Data received on OUT endpoints is looped back onto corresponding IN endpoints.
    - **Data SRC-SNK:** The IN endpoints serve as data sources, which continuously provide pre-defined data, while the 'OUT' endpoints serve as data sinks, which continuously drain the received data.
 - The application has a fixed set of endpoints in **Data Loopback** mode. Endpoint 'OUT-1 endpoint' is paired with 'IN-1 endpoint' and so on.
-- The **Data SRC-SINK** mode is performed using internal RAM buffers on the FX2G3 device, which will hold the data received from the 'OUT' endpoint and eventually discard the data, making the device ready for a new set of data. A predefined pattern of data will be sent to the host through the 'IN' endpoints.
+- The **Data SRC-SINK** mode is performed using internal RAM buffers on the EZ-USB&trade; FX2G3 device, which will hold the data received from the 'OUT' endpoint and eventually discard the data, making the device ready for a new set of data. A predefined pattern of data will be sent to the host through the 'IN' endpoints.
 
 
 ### Application workflow
 
    The application flow involves three main steps - Initialization, USB device enumeration, and data transfers.
+
 
 #### Initialization
 
@@ -239,30 +256,38 @@ During initialization, the following steps are performed:
 
 This application's functionality can be customized through the compile-time parameters that can be turned ON or OFF through the *makefile*.
 The application uses the GNU Arm&reg; 11.3 toolchain, which is part of the ModusToolbox&trade; installation for compilation.
-- Run the `make` command to compile the application and generate a USB bootloader compatible binary. This binary can be programmed to the FX2G3 device using the EZ-USB&trade; Control Center application.
-- Run the `make BLENABLE=no` command to compile the application and generate the standalone binary. This binary can be programmed onto the FX2G3 device through the SWD interface using the OpenOCD tool. For more details, see the [EZ-USB&trade; FX2G3 SDK user guide](https://www.infineon.com/cms/en/product/promopages/ez-usb-fx2g3/#main-features-comparison).
+- Run the `make` command or build the project in your IDE to compile the application and generate a USB bootloader compatible binary. This binary can be programmed to the EZ-USB&trade; FX2G3 device using the EZ-USB&trade; Control Center application.
+- Run the `make BLENABLE=no` command or set the variable in the **Makefile** to compile the application and generate the standalone binary. This binary can be programmed onto the EZ-USB&trade; FX2G3 device through the SWD interface using the OpenOCD tool. For more details, see the [EZ-USB&trade; FX2G3 SDK user guide](https://www.infineon.com/cms/en/product/promopages/ez-usb-fx2g3/#main-features-comparison).
+- Run the `make REV02=no` command or set the variable in the **Makefile** to compile the application and generate the binary compatible with REV01 version of the EZ-USB&trade; FX2G3 Kit.
 
 By default, the application is configured for data loopback mode and make a USBHS data connection. These settings can be modified by modifying settings in the *Makefile*.
 
 **Table 2. Macro description**
-Macro name        | Description                               | Allowed values
-:-------------    | :------------                             | :--------------
-APP_SRC_SNK_EN     | Select the application mode              | 1u for Data SRC-snk. <br> 0u for Data Loopback.
-USBFS_LOGS_ENABLE | Enable debug logs through USBFS port      | 1u for debug logs over USBFS. <br> 0u for debug logs over UART (SCB4).
 
-## Application files
-File                                            |    Description   
-:-------------                                  | :------------                
+Flag name         | Description                               | Allowed values
+:-------------    | :------------                             | :--------------
+APP_SRC_SNK_EN     | Select the application mode               | 1u for Data SRC-snk. <br> 0u for Data Loopback.
+USBFS_LOGS_ENABLE | Enable debug logs through USBFS port      | 1u for debug logs over USBFS. <br> 0u for debug logs over UART (SCB4).
+<br>
+
+
+### Application files
+
+**Table 3. Application file description**
+
+File                                            | Description   
+:-------------                                  | :------------                         
 *usb_app_common.c*                                | C source file implementing functions to configure USB endpoint and DMA resources for USB      
 *usb_app_common.h*                                | Header file with USB endpoint configuration and DMA resources for USB declaration
-*usb_echo_device.c*                               | C source file implementing the data loopback and source/sink logic for the FX2G3 USB Echo Device application      
+*usb_echo_device.c*                               | C source file implementing the data loopback and source/sink logic for the EZ-USB&trade; FX2G3 USB Echo Device application      
 *usb_echo_device.h*                               | Header file with data loopback and source/sink logic function declaration
-*usb_app.c*                                       | C source file implementing USB data handling part of the FX2G3 USB Echo Device application logic
+*usb_app.c*                                       | C source file implementing USB data handling part of the EZ-USB&trade; FX2G3 USB echo device application logic
 *usb_app.h*                                       | Header file for application data structures and functions declaration
 *usb_descriptors.c*                               | C source file containing the USB descriptors
 *main.c*                                          | Source file for device initialization, ISRs, etc.
 *cm0_code.c*                                      | CM0 initialization code
 *Makefile*                                        | GNU make compliant build script for compiling this example
+<br>
 
 
 ## Related resources
@@ -270,8 +295,8 @@ File                                            |    Description
 Resources  | Links
 -----------|----------------------------------
 Code examples  | [Using ModusToolbox&trade;](https://github.com/Infineon/Code-Examples-for-ModusToolbox-Software) on GitHub
-Device documentation | [FX2G3 datasheets](https://www.infineon.com/cms/en/product/promopages/ez-usb-fx2g3/#!?fileId=8ac78c8c90530b3a01909c03f29537e0)
-Development kits | Select your kits from the [Evaluation board finder](https://www.infineon.com/cms/en/design-support/finder-selection-tools/product-finder/evaluation-board)
+Device documentation | [EZ-USB&trade; FX2G3 datasheets](https://www.infineon.com/cms/en/product/promopages/ez-usb-fx2g3/#!?fileId=8ac78c8c90530b3a01909c03f29537e0)
+Development kits | Select your kits from the [Evaluation board finder](https://www.infineon.com/cms/en/design-support/finder-selection-tools/product-finder/evaluation-board).
 Libraries on GitHub | [mtb-pdl-cat1](https://github.com/Infineon/mtb-pdl-cat1) – Peripheral Driver Library (PDL) and docs
 Middleware on GitHub  | [usbfxstack](https://github.com/Infineon/usbfxstack) – USBFXStack middleware library and docs
 Tools  | [ModusToolbox&trade;](https://www.infineon.com/modustoolbox) – ModusToolbox&trade; software is a collection of easy-to-use libraries and tools enabling rapid development with Infineon MCUs for applications ranging from wireless and cloud-connected systems, edge AI/ML, embedded sense and control, to wired USB connectivity using PSOC&trade; Industrial/IoT MCUs, AIROC&trade; Wi-Fi and Bluetooth&reg; connectivity devices, XMC&trade; Industrial MCUs, and EZ-USB&trade;/EZ-PD&trade; wired connectivity controllers. ModusToolbox&trade; incorporates a comprehensive set of BSPs, HAL, libraries, configuration tools, and provides support for industry-standard IDEs to fast-track your embedded application development.
@@ -285,15 +310,15 @@ Tools  | [ModusToolbox&trade;](https://www.infineon.com/modustoolbox) – ModusT
 Infineon provides a wealth of data at [www.infineon.com](https://www.infineon.com) to help you select the right device, and quickly and effectively integrate it into your design.
 
 
-
 ## Document history
 
 
-Document title: *CE240682* – *EZ-USB FX2G3: USBHS device application*
+Document title: *CE240682* – *EZ-USB&trade; FX2G3: USBHS device application*
 
  Version | Description of change
  ------- | ---------------------
  1.0.0   | New code example
+ 1.0.1   | Updated for REV02 Kit
 <br>
 
 
@@ -301,6 +326,7 @@ Document title: *CE240682* – *EZ-USB FX2G3: USBHS device application*
 All referenced product or service names and trademarks are the property of their respective owners.
 
 The Bluetooth&reg; word mark and logos are registered trademarks owned by Bluetooth SIG, Inc., and any use of such marks by Infineon is under license.
+
 
 ---------------------------------------------------------
 

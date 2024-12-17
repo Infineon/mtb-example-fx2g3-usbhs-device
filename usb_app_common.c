@@ -73,6 +73,7 @@ Cy_USB_AppConfigureEndp (cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, uint8_t *pEndpDscr)
     uint32_t isoPkts = 0x00;
     uint8_t burstSize = 0x00;
     uint8_t maxStream = 0x00;
+    uint8_t interval = 0x00;
 
     DBG_APP_TRACE("Cy_USB_AppConfigureEndp >> \r\n");
     /* If it is not endpoint descriptor then return */
@@ -103,6 +104,7 @@ Cy_USB_AppConfigureEndp (cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, uint8_t *pEndpDscr)
     }
 
     valid = 0x01;
+    Cy_USBD_GetEndpInterval(pEndpDscr, &interval);
 
     /* Prepare endpointConfig parameter. */
     endpConfig.endpType = (cy_en_usb_endp_type_t)endpType;
@@ -113,6 +115,7 @@ Cy_USB_AppConfigureEndp (cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, uint8_t *pEndpDscr)
     endpConfig.isoPkts = isoPkts;
     endpConfig.burstSize = burstSize;
     endpConfig.streamID = (maxStream & 0x1F);
+    endpConfig.interval = interval;
     /*
      * allowNakTillDmaRdy = true means device will send NAK
      * till DMA setup is ready. This field is applicable to only

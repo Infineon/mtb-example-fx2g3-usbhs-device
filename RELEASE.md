@@ -1,4 +1,4 @@
-# USB High Speed Device Application 1.0
+# USB High Speed Device Application 1.0.1
 
 ## What's Included?
 
