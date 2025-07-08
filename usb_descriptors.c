@@ -2,11 +2,11 @@
 * \file usb_descriptors.c
 * \version 1.0
 *
-* Defines the USB descriptors used in the Echo Device Application.
+* \brief Defines the USB descriptors used in the Echo Device Application.
 *
 *******************************************************************************
 * \copyright
-* (c) (2024), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2025), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -37,7 +37,7 @@ const uint8_t CyFxUSB20DeviceDscr[] __attribute__ ((aligned (4))) =
 {
     0x12,                           /* Descriptor size */
     0x01,                           /* Device descriptor type */
-    0x10,0x02,                      /* USB 2.00   0x10,0x02,*/
+    0x10,0x02,                      /* USB 2.10  */
     0x00,                           /* Device class */
     0x00,                           /* Device sub-class */
     0x00,                           /* Device protocol */
@@ -93,8 +93,8 @@ USB_DESC_ATTRIBUTES uint8_t CyFxUSBHSConfigDscr[1024] __attribute__ ((aligned (3
     0x01,                           /* Number of interfaces */
     0x01,                           /* Configuration number */
     0x00,                           /* Configuration string index */
-    0xA0,                           /* Config characteristics - bus powered  and Remote wakeup enable 0xA0 */
-    0x32,                           /* Max power consumption of device (in 2mA unit) : 100mA */
+    0x80,                           /* Config characteristics - bus powered  and Remote wakeup disable 0x80 */
+    0x32,                           /* Max power consumption of device (in 2mA unit) : 100mA - 0x32 */
 
     /* Interface descriptor, alt setting 0, bulk tranfer */
     0x09,                           /* Descriptor size */
@@ -118,10 +118,10 @@ USB_DESC_ATTRIBUTES uint8_t CyFxUSBFSConfigDscr[1024] __attribute__ ((aligned (4
     0x01,                           /* Number of interfaces */
     0x01,                           /* Configuration number */
     0x00,                           /* Configuration string index */
-    0xA0,                           /* Config characteristics - bus powered  and Remote wakeup enable 0xA0 */
-    0x32,                           /* Max power consumption of device (in 2mA unit) : 100mA */
+    0x80,                           /* Config characteristics - bus powered  and Remote wakeup disable 0x80 */
+    0x32,                           /* Max power consumption of device (in 2mA unit) : 100mA - 0x32 */
 
-    /* Interface descriptor, alt setting 0, bulk tranfer */
+    /* Interface descriptor, alt setting 0, bulk transfer */
     0x09,                           /* Descriptor size */
     0x04,                           /* Interface descriptor type */
     0x00,                           /* Interface number */
@@ -453,7 +453,7 @@ void Cy_USB_GenerateConfigDescriptor (void)
     CyFxUSBFSConfigDscr[idx++] = 0x00;
     CyFxUSBFSConfigDscr[idx++] = 0x80;
     CyFxUSBFSConfigDscr[idx++] = 0x32;
-
+    
     /* First interface descriptor with Bulk endpoints. */
     CyFxUSBFSConfigDscr[idx++] = 0x09;
     CyFxUSBFSConfigDscr[idx++] = 0x04;

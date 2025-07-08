@@ -2,11 +2,11 @@
 * \file usb_app.c
 * \version 1.0
 *
-* Implements the USB data handling part of the FX2G3 USB Echo Device application.
+* \details Implements the USB data handling part of the FX2G3 USB Echo Device application.
 *
-*******************************************************************************
+*********************************************************************************
 * \copyright
-* (c) (2024), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2025), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -46,29 +46,31 @@ cy_israddress GetEPInDmaIsr(uint8_t epNum);
 cy_israddress GetEPOutDmaIsr(uint8_t epNum);
 
 uint32_t Ep0TestBuffer[1024U] __attribute__ ((aligned (32)));
+volatile uint16_t pktType = 0;
+volatile uint16_t pktLength = 1024;
 
-/*
- * Function: Cy_USB_AppInit()
- * Description: This function Initializes application related data structures,
- *              register callback and creates queue and task for device
- *              function. Common function for FS/HS/SS.
- * Parameter: cy_stc_usb_app_ctxt_t, cy_stc_usb_usbd_ctxt_t, DMAC_Type
- *            DW_Type, DW_Type
- * return: None.
- * Note: This function should be called after USBD_Init()
+/**
+ * \name Cy_USB_AppInit
+ * \brief   This function Initializes application related data structures, register callback
+ *          creates task for device function.
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer Context pointer
+ * \param pCpuDmacBase DMAC base address
+ * \param pCpuDw0Base DataWire 0 base address
+ * \param pCpuDw1Base DataWire 1 base address
+ * \param pHbDmaMgrCtxt HBDMA Manager Context
+ * \retval None
  */
 void
 Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt,
                 cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, DMAC_Type *pCpuDmacBase,
-                DW_Type *pCpuDw0Base, DW_Type *pCpuDw1Base)
+                DW_Type *pCpuDw0Base, DW_Type *pCpuDw1Base, cy_stc_hbdma_mgr_context_t *pHbDmaMgrCtxt)
 {
     uint32_t index;
     cy_stc_app_endp_dma_set_t *pEndpInDma;
     cy_stc_app_endp_dma_set_t *pEndpOutDma;
-
-#if FREERTOS_ENABLE
     BaseType_t status = pdFALSE;
-#endif /* FREERTOS_ENABLE */
+
     pAppCtxt->devState = CY_USB_DEVICE_STATE_DISABLE;
     pAppCtxt->prevDevState = CY_USB_DEVICE_STATE_DISABLE;
 
@@ -82,7 +84,6 @@ Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt,
     pAppCtxt->activeCfgNum = 0x00;
     pAppCtxt->currentAltSetting = 0x00;
     pAppCtxt->enumMethod = CY_USB_ENUM_METHOD_FAST;
-    pAppCtxt->dmaBufFreeIdx = 0;
 
     for (index = 0x01; index < CY_USB_NUM_ENDP_CONFIGURED; index++) {
         pEndpInDma = &(pAppCtxt->endpInDma[index]);
@@ -91,7 +92,7 @@ Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt,
         pEndpInDma->channel = index;
         pEndpInDma->firstRqtDone = false;
 
-        // /* Time to handle OUT endpoints. */
+        /* Time to handle OUT endpoints. */
         pEndpOutDma = &(pAppCtxt->endpOutDma[index]);
 
         memset((void *)pEndpOutDma, 0, sizeof(cy_stc_app_endp_dma_set_t));
@@ -103,8 +104,8 @@ Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt,
     pAppCtxt->pCpuDw0Base = pCpuDw0Base;
     pAppCtxt->pCpuDw1Base = pCpuDw1Base;
     pAppCtxt->pUsbdCtxt = pUsbdCtxt;
+    pAppCtxt->pHbDmaMgrCtxt = pHbDmaMgrCtxt;
     pAppCtxt->dataXferIntrEnabled = false;
-    pAppCtxt->hbChannelCreated = false;
 
     /*
      * Callbacks registered with USBD layer. These callbacks will be called
@@ -117,10 +118,9 @@ Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt,
          * Initialize echo device only once and this includes creating
          * thread and queue.
          */
-        DBG_APP_INFO("echoDeviceInit\r\n");
+        DBG_APP_INFO("Echo Device Init\r\n");
         pAppCtxt->pDevFuncCtxt = Cy_USB_EchoDeviceInit(pAppCtxt);
 
-#if FREERTOS_ENABLE
         /* create queue and register it to kernel. */
         pAppCtxt->xQueue = xQueueCreate(CY_USB_ECHO_DEVIE_MSG_QUEUE_SIZE,
                                         CY_USB_ECHO_DEVIE_MSG_SIZE);
@@ -134,9 +134,15 @@ Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt,
             DBG_APP_ERR("TaskcreateFail\r\n");
             return;
         }
-#else
-        Cy_USB_ConnectionEnable(pAppCtxt);
-#endif /* FREERTOS_ENABLE */
+
+        pAppCtxt->vbusDebounceTimer = xTimerCreate("VbusDebounceTimer", 200, pdFALSE,
+                (void *)pAppCtxt, Cy_USB_VbusDebounceTimerCallback);
+        if (pAppCtxt->vbusDebounceTimer == NULL) {
+            DBG_APP_ERR("TimerCreateFail\r\n");
+            return;
+        }
+        DBG_APP_INFO("VBus debounce timer created\r\n");
+
         pAppCtxt->firstInitDone = 0x01;
         
     }
@@ -147,12 +153,11 @@ Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt,
     return;
 }   /* end of function. */
 
-
-/*
- * Function: Cy_USB_AppRegisterCallback()
- * Description: This function will register all calback with USBD layer. 
- * Parameter: cy_stc_usb_app_ctxt_t.
- * return: None.
+/**
+ * \name Cy_USB_AppRegisterCallback
+ * \brief This function will register all calback with USBD layer.
+ * \param pAppCtxt application layer context pointer.
+ * \retval None
  */
 void
 Cy_USB_AppRegisterCallback (cy_stc_usb_app_ctxt_t *pAppCtxt)
@@ -186,14 +191,15 @@ Cy_USB_AppRegisterCallback (cy_stc_usb_app_ctxt_t *pAppCtxt)
     return;
 }   /* end of function. */
 
-
-
-/*
- * Function: Cy_USB_USBD_InitEndp0InCpuDmaDscrConfig()
- * Description: It initializes DMA descriptor for endpoint 0 IN transfer.
- * Parameter: cy_stc_dma_descriptor_config_t, pSrcAddr, pDstAddr, endpSize,
- *            endpDirection.
- * return: None.
+/**
+ * \name Cy_USB_AppInitEndpCpuDmaDscrConfig
+ * \brief This function initializes DMA descriptor for endpoint 0 IN transfer.
+ * \param pEndpCpuDmaDscrConfig Endpoint DMa descriptor configuration pointer
+ * \param pSrcAddr data source address
+ * \param pDstAddr data destination address
+ * \param endpSize Endpoint size
+ * \param endpDirection Endpoint direction
+ * \retval None
  */
 void 
 Cy_USB_AppInitEndpCpuDmaDscrConfig (
@@ -222,25 +228,14 @@ Cy_USB_AppInitEndpCpuDmaDscrConfig (
     return;
 }   /* End of function  */
 
-
-
-/*******************************************************************************
-* Function name: Cy_USB_AppSetupEndpDmaParamsHs
-****************************************************************************//**
-*
-* This Function will setup Endpoint and DMA related parameters for high speed
-* device before transfer initiated.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param pEndpDscr
-* pointer to endpoint descriptor.
-*
-* \return
-* None
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppSetupEndpDmaParamsHs
+ * \details This Function will setup Endpoint and DMA related parameters for high speed
+ *          device before transfer initiated.
+ * \param pAppCtxt application layer context pointer.
+ * \param pEndpDscr pointer to endpoint descriptor.
+ * \retval None
+ */
 void
 Cy_USB_AppSetupEndpDmaParamsHs (cy_stc_usb_app_ctxt_t *pUsbApp,
                                 uint8_t *pEndpDscr)
@@ -294,32 +289,16 @@ Cy_USB_AppSetupEndpDmaParamsHs (cy_stc_usb_app_ctxt_t *pUsbApp,
     return;
 }   /* end of function  */
 
-
-/*******************************************************************************
-* Function name: Cy_USB_AppQueueRead
-****************************************************************************//**
-*
-*  Function to queue read operation on an OUT endpoint.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNum
-* endpoint number.
-*
-* \param endpDir
-* endpoint direction
-*
-* \param pBuffer
-* pointer to buffer where data will be stored.
-*
-* \param dataSize
-* expected data size.
-*
-* \return
-* None
-*
-********************************************************************************/
+/**
+ * \name Cy_USB_AppQueueRead
+ * \brief Function to queue read operation on an OUT endpoint.
+ * \param pAppCtxt application layer context pointer.
+ * \param endpNum endpoint number.
+ * \param endpDir endpoint direction
+ * \param pBuffer pointer to buffer where data will be stored.
+ * \param dataSize expected data size.
+ * \retval None
+ */
 void
 Cy_USB_AppQueueRead (cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNum,
                      uint8_t *pBuffer, uint16_t dataSize)
@@ -366,26 +345,15 @@ Cy_USB_AppQueueRead (cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNum,
 } /* end of function */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppReadShortPacket
-****************************************************************************//**
-*
-*  Function to modify an ongoing DMA read operation to take care of a short
-*  packet.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNum
-* endpoint number.
-*
-* \param pktSize
-* Size of the short packet to be read out. Can be zero in case of ZLP.
-*
-* \return
-* 0x00 or Data size.
-*
-********************************************************************************/
+/**
+ * \name Cy_USB_AppReadShortPacket
+ * \brief   Function to modify an ongoing DMA read operation to take care of a short
+ *          packet.
+ * \param pAppCtxt application layer context pointer.
+ * \param endpNum endpoint number.
+ * \param pktSize Size of the short packet to be read out. Can be zero in case of ZLP.
+ * \retval 0x00 or Data size.
+ */
 uint16_t
 Cy_USB_AppReadShortPacket (cy_stc_usb_app_ctxt_t *pAppCtxt,
                            uint8_t endpNum, uint16_t pktSize)
@@ -412,31 +380,17 @@ Cy_USB_AppReadShortPacket (cy_stc_usb_app_ctxt_t *pAppCtxt,
 } /* end of function */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppQueueWrite
-****************************************************************************//**
-*
-*  Function to queue write operation on an IN endpoint
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNum
-* endpoint number.
-*
-* \param endpDir
-* endpoint direction
-*
-* \param pBuffer
-* pointer to buffer where data is available.
-*
-* \param dataSize
-* size of data available in buffer.
-*
-* \return
-* None
-*
-********************************************************************************/
+/**
+ * \name Cy_USB_AppQueueWrite
+ * \brief Function to queue write operation on an IN endpoint
+ * \param pAppCtxt
+ * \brief application layer context pointer.
+ * \param endpNum endpoint number.
+ * \param endpDir endpoint direction
+ * \param pBuffer pointer to buffer where data is available.
+ * \param dataSize size of data available in buffer.
+ * \retval None
+ */
 void
 Cy_USB_AppQueueWrite (cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNum,
                       uint8_t *pBuffer, uint16_t dataSize)
@@ -471,13 +425,41 @@ Cy_USB_AppQueueWrite (cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNum,
     DBG_APP_TRACE("Cy_USB_AppQueueWrite <<\r\n");
 } /* end of function */
 
-#if FREERTOS_ENABLE
 /*
- * Function: Cy_USB_RecvEndp0TimerCallback()
- * Description: This Function will be called when timer expires.
- *              This function posts TIMER Expiry message to echo device.
- * Parameter: xTimer
+ * Function: Cy_USB_VbusDebounceTimerCallback()
+ * Description: Timer used to do debounce on VBus changed interrupt notification.
+ *
+ * Parameter:
+ *      xTimer: RTOS timer handle.
  * return: void
+ */
+void
+Cy_USB_VbusDebounceTimerCallback (TimerHandle_t xTimer)
+{
+    cy_stc_usb_app_ctxt_t *pAppCtxt = (cy_stc_usb_app_ctxt_t *)pvTimerGetTimerID(xTimer);
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    cy_stc_usbd_app_msg_t xMsg;
+
+
+    if (pAppCtxt->vbusChangeIntr) {
+        DBG_APP_INFO("VbusDebounce_CB\r\n");
+        /* Notify the task that VBus debounce is complete. */
+        xMsg.type = CY_USB_VBUS_CHANGE_DEBOUNCED;
+        xQueueSendFromISR(pAppCtxt->xQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+
+        /* Clear and re-enable the interrupt. */
+        pAppCtxt->vbusChangeIntr = false;
+        Cy_GPIO_ClearInterrupt(VBUS_DETECT_GPIO_PORT, VBUS_DETECT_GPIO_PIN);
+        Cy_GPIO_SetInterruptMask(VBUS_DETECT_GPIO_PORT, VBUS_DETECT_GPIO_PIN, 1);
+    }
+}   /* end of function  */
+
+/**
+ * \name Cy_USB_RecvEndp0TimerCallback
+ * \brief   This Function will be called when timer expires.
+ *          This function posts TIMER Expiry message to echo device.
+ * \param xTimer Timer handle
+ * \retval None
  */
 void
 Cy_USB_RecvEndp0TimerCallback (TimerHandle_t xTimer)
@@ -498,17 +480,14 @@ Cy_USB_RecvEndp0TimerCallback (TimerHandle_t xTimer)
     }
     return;
 }
-#endif /* FREERTOS_ENABLE */
 
-
-/*
- * Function: Cy_USB_AppSetCfgCallback()
- * Description: This Function will be called by USBD  layer when 
- *              set configuration command successful. This function 
- *              does sanity check and prepare device for function
- *              to take over.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t
- * return: void
+/**
+ * \name Cy_USB_AppSetCfgCallback=
+ * \brief Callback function will be invoked by USBD when set configuration is received
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer context pointer.
+ * \param pMsg USB Message
+ * \retval None
  */
 void
 Cy_USB_AppSetCfgCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
@@ -519,10 +498,8 @@ Cy_USB_AppSetCfgCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     cy_en_usb_speed_t devSpeed;
     cy_en_usb_app_ret_code_t retCode;
 
-#if FREERTOS_ENABLE
     BaseType_t status;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-#endif /* FREERTOS_ENABLE */
 
     DBG_APP_TRACE("Cy_USB_AppSetCfgCallback >>\r\n");
 
@@ -540,14 +517,12 @@ Cy_USB_AppSetCfgCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     /* specific to src-snk and loopback function. */
     Cy_DevSpeedBasedfxQueueUpdate(pAppCtxt, devSpeed);
 
-#if FREERTOS_ENABLE
     /* Set timer expiry to 5 second*/
     pUsbApp->endp0OuttimerExpiry = 5000;
     /* Create timer with 5Sec Expiry and recurring = FALSE. */
     pUsbApp->endp0OutTimerHandle =
         xTimerCreate("Endp0OutTimer", pUsbApp->endp0OuttimerExpiry, pdFALSE,
                      (void *)pUsbApp, Cy_USB_RecvEndp0TimerCallback);
-#endif /* FREERTOS_ENABLE */
     /*
      * first send message to configure channel and then transfer data.
      * can be optimized with single message later.
@@ -555,25 +530,19 @@ Cy_USB_AppSetCfgCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 
     DBG_APP_TRACE("send CY_USB_ECHO_DEVICE_MSG_SETUP_DATA_XFER\r\n");
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_SETUP_DATA_XFER;
-#if FREERTOS_ENABLE
+
     status = xQueueSendFromISR(pUsbApp->xQueue, &(xMsg), &(xHigherPriorityTaskWoken));
     if (status != pdPASS) {
         DBG_APP_ERR("AppMsgSETUPSndFail\r\n");
     }
-#else
-    Cy_USB_EchoDeviceTaskHandler(pUsbApp, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     DBG_APP_TRACE("send CY_USB_ECHO_DEVICE_MSG_START_DATA_XFER\r\n");
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_START_DATA_XFER;
-#if FREERTOS_ENABLE
+
     status = xQueueSendFromISR(pUsbApp->xQueue, &(xMsg), &(xHigherPriorityTaskWoken));
     if (status != pdPASS) {
         DBG_APP_ERR("AppMsgSTARTSndFail\r\n");
     }
-#else
-    Cy_USB_EchoDeviceTaskHandler(pUsbApp, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     /*
      * Register DMA transfer completion interrupt for OUT
@@ -586,25 +555,33 @@ Cy_USB_AppSetCfgCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
                                      pUsbApp->pUsbdCtxt->channel1,
                                      CY_DMAC_INTR_COMPLETION);
 
-    if(devSpeed == CY_USBD_USB_DEV_HS)
-    {
-        Cy_USBD_LpmEnable(pUsbdCtxt);
-    }
+#if LPM_ENABLE
+    /* Schedule LPM enable after 80 milliseconds. */
+    pUsbApp->isLpmEnabled  = false;
+    pUsbApp->lpmEnableTime = Cy_USBD_GetTimerTick() + 80;
+    DBG_APP_INFO("Enabling LPM transitions\r\n");
+
+#else
+    DBG_APP_INFO("Disabling LPM transitions\r\n");
+    pUsbApp->lpmEnableTime = 0;
+    Cy_USBD_LpmDisable(pUsbApp->pUsbdCtxt);
+#endif /* LPM_ENABLE */
+
 
     DBG_APP_TRACE("Cy_USB_AppSetCfgCallback <<\r\n\r\n");
     return;
 }   /* end of function */
 
-
-/*
- * Function: Cy_USB_AppBusResetCallback()
- * Description: This Function will be called by USBD when bus detects RESET.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t
- * return: void
+/**
+ * \name Cy_USB_AppBusResetCallback
+ * \brief Callback function will be invoked by USBD when bus detects RESET
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer context pointer
+ * \param pMsg USB Message
+ * \retval None
  */
-void 
-Cy_USB_AppBusResetCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
-                            cy_stc_usb_cal_msg_t *pMsg)
+void Cy_USB_AppBusResetCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
+                                cy_stc_usb_cal_msg_t *pMsg)
 {
     cy_stc_usb_app_ctxt_t *pUsbApp;
 
@@ -618,7 +595,7 @@ Cy_USB_AppBusResetCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
      * of reseting its own data structure as well as "device function".
      */
     Cy_USB_AppInit(pUsbApp, pUsbdCtxt, pUsbApp->pCpuDmacBase,
-                   pUsbApp->pCpuDw0Base, pUsbApp->pCpuDw1Base);
+                   pUsbApp->pCpuDw0Base, pUsbApp->pCpuDw1Base, pUsbApp->pHbDmaMgrCtxt);
     pUsbApp->devState = CY_USB_DEVICE_STATE_RESET;
     pUsbApp->prevDevState = CY_USB_DEVICE_STATE_RESET;
 
@@ -626,20 +603,17 @@ Cy_USB_AppBusResetCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     return;
 }   /* end of function. */
 
-
-/*
- * Function: Cy_USB_AppBusResetDoneCallback()
- * Description: This Function will be called by USBD  layer when 
- *              set configuration command successful. This function 
- *              does sanity check and prepare device for function
- *              to take over.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t
- * return: void
+/**
+ * \name Cy_USB_AppBusResetDoneCallback
+ * \brief Callback function will be invoked by USBD when RESET is completed
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer context pointer
+ * \param pMsg USB Message
+ * \retval None
  */
-void 
-Cy_USB_AppBusResetDoneCallback (void *pAppCtxt, 
-                                cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
-                                cy_stc_usb_cal_msg_t *pMsg)
+void Cy_USB_AppBusResetDoneCallback(void *pAppCtxt,
+                                    cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
+                                    cy_stc_usb_cal_msg_t *pMsg)
 {
     cy_stc_usb_app_ctxt_t *pUsbApp;
 
@@ -647,19 +621,19 @@ Cy_USB_AppBusResetDoneCallback (void *pAppCtxt,
     pUsbApp->devState = CY_USB_DEVICE_STATE_DEFAULT;
     pUsbApp->prevDevState = pUsbApp->devState;
     return;
-}   /* end of function. */
+} /* end of function. */
 
-
-/*
- * Function: Cy_USB_AppBusSpeedCallback()
- * Description: This Function will be called by USBD  layer when
- *              speed is identified or speed change is detected. 
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t
- * return: void
+/**
+ * \name Cy_USB_AppBusSpeedCallback
+ * \brief   Callback function will be invoked by USBD when speed is identified or
+ *          speed change is detected
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD context
+ * \param pMsg USB Message
+ * \retval None
  */
-void 
-Cy_USB_AppBusSpeedCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
-                            cy_stc_usb_cal_msg_t *pMsg)
+void Cy_USB_AppBusSpeedCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
+                                cy_stc_usb_cal_msg_t *pMsg)
 {
     cy_stc_usb_app_ctxt_t *pUsbApp;
 
@@ -667,28 +641,23 @@ Cy_USB_AppBusSpeedCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     pUsbApp->devState = CY_USB_DEVICE_STATE_DEFAULT;
     pUsbApp->devSpeed = Cy_USBD_GetDeviceSpeed(pUsbdCtxt);
     return;
-}   /* end of function. */
+} /* end of function. */
 
-/*
- * Function: Cy_USB_AppSetupCallback()
- * Description: This Function will be called by USBD  layer when 
- *              set configuration command successful. This function 
- *              does sanity check and prepare device for function
- *              to take over.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t
- * return: void
+/**
+ * \name Cy_USB_AppSetupCallback
+ * \brief Callback function will be invoked by USBD when SETUP packet is received
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD context
+ * \param pMsg USB Message
+ * \retval None
  */
-volatile uint16_t pktType = 0;
-volatile uint16_t pktLength = 1024;
-
 void 
 Cy_USB_AppSetupCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
                          cy_stc_usb_cal_msg_t *pMsg)
 {
-#if FREERTOS_ENABLE
     cy_stc_usb_app_ctxt_t *pUsbApp = (cy_stc_usb_app_ctxt_t *)pAppCtxt;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-#endif
+
     cy_stc_usbd_app_msg_t xMsg;
     BaseType_t status;
 
@@ -701,67 +670,62 @@ Cy_USB_AppSetupCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     xMsg.data[0] = pMsg->data[0];
     xMsg.data[1] = pMsg->data[1];
 
-#if FREERTOS_ENABLE
     status = xQueueSendFromISR(pUsbApp->xQueue, &(xMsg),
                                &(xHigherPriorityTaskWoken));
-#else
-     Cy_USB_EchoDeviceTaskHandler(pAppCtxt, &xMsg);
-#endif /* FREERTOS_ENABLE */
     (void)status;
 
 }   /* end of function. */
 
-/*
- * Function: Cy_USB_AppSuspendCallback()
- * Description: This Function will be called by USBD  layer when 
- *              Suspend signal/message is detected. 
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t, cy_stc_usb_cal_msg_t
- * return: void
+/**
+ * \name Cy_USB_AppSuspendCallback
+ * \brief Callback function will be invoked by USBD when Suspend signal/message is detected
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD context
+ * \param pMsg USB Message
+ * \retval None
  */
-void 
-Cy_USB_AppSuspendCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
-                           cy_stc_usb_cal_msg_t *pMsg)
+void Cy_USB_AppSuspendCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
+                               cy_stc_usb_cal_msg_t *pMsg)
 {
     cy_stc_usb_app_ctxt_t *pUsbApp;
 
     pUsbApp = (cy_stc_usb_app_ctxt_t *)pAppCtxt;
     pUsbApp->prevDevState = pUsbApp->devState;
     pUsbApp->devState = CY_USB_DEVICE_STATE_SUSPEND;
-}   /* end of function. */
+} /* end of function. */
 
-/*
- * Function: Cy_USB_AppResumeCallback()
- * Description: This Function will be called by USBD  layer when 
- *              Resume signal/message is detected.  
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t, cy_stc_usb_cal_msg_t
- * return: void
+/**
+ * \name Cy_USB_AppResumeCallback
+ * \brief Callback function will be invoked by USBD when Resume signal/message is detected
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD context
+ * \param pMsg USB Message
+ * \retval None
  */
-void 
-Cy_USB_AppResumeCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
-                          cy_stc_usb_cal_msg_t *pMsg)
+void Cy_USB_AppResumeCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
+                              cy_stc_usb_cal_msg_t *pMsg)
 {
     cy_stc_usb_app_ctxt_t *pUsbApp;
     cy_en_usb_device_state_t tempState;
 
     pUsbApp = (cy_stc_usb_app_ctxt_t *)pAppCtxt;
 
-    tempState =  pUsbApp->devState;
+    tempState = pUsbApp->devState;
     pUsbApp->devState = pUsbApp->prevDevState;
     pUsbApp->prevDevState = tempState;
     return;
-}   /* end of function. */
+} /* end of function. */
 
-
-/*
- * Function: Cy_USB_AppSetIntfCallback()
- * Description: This Function will be called by USBD  layer when 
- *              set interface is called.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t, cy_stc_usb_cal_msg_t
- * return: void
+/**
+ * \name Cy_USB_AppSetIntfCallback
+ * \brief Callback function will be invoked by USBD when SET_INTERFACE is  received
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD context
+ * \param pMsg USB Message
+ * \retval None
  */
-void 
-Cy_USB_AppSetIntfCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
-                           cy_stc_usb_cal_msg_t *pMsg)
+void Cy_USB_AppSetIntfCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
+                               cy_stc_usb_cal_msg_t *pMsg)
 {
     cy_stc_usb_setup_req_t *pSetupReq;
     cy_stc_usb_app_ctxt_t *pUsbApp;
@@ -770,10 +734,7 @@ Cy_USB_AppSetIntfCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     uint8_t *pIntfDscr, *pEndpDscr;
     BaseType_t status;
     cy_stc_usbd_app_msg_t xMsg;
-
-#if FREERTOS_ENABLE
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-#endif
 
     pUsbApp = (cy_stc_usb_app_ctxt_t *)pAppCtxt;
     DBG_APP_TRACE("Cy_USB_AppSetIntfCallback >> \r\n");
@@ -815,12 +776,8 @@ Cy_USB_AppSetIntfCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 
     /* first send stop data transfer message to stop data transfer. */
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_STOP_DATA_XFER;
-#if FREERTOS_ENABLE
     status = xQueueSendFromISR(pUsbApp->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
-#else
-    Cy_USB_EchoDeviceTaskHandler(pUsbApp, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     /* Now unconfigure things related to previous altSetting*/
     numOfEndp = Cy_USBD_FindNumOfEndp(pIntfDscr);
@@ -844,9 +801,6 @@ Cy_USB_AppSetIntfCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     }
 
     DBG_APP_INFO("Prev AltSet Unconfigured....... \r\n");
-
-    /* Flush all EPM contents at this stage. */
-    Cy_USBD_FlushEndpAll(pUsbdCtxt, CY_USB_ENDP_DIR_IN);
 
     /* Now take care of different config with new alt setting. */
     DBG_APP_INFO("New AltSet ConfigStarts........ \r\n");
@@ -879,33 +833,25 @@ Cy_USB_AppSetIntfCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
      * Send message to setup and start data transfer.
      */
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_SETUP_DATA_XFER;
-#if FREERTOS_ENABLE
     status = xQueueSendFromISR(pUsbApp->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
-#else
-    Cy_USB_EchoDeviceTaskHandler(pUsbApp, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_START_DATA_XFER;
-#if FREERTOS_ENABLE
     status = xQueueSendFromISR(pUsbApp->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
-#else
-    Cy_USB_EchoDeviceTaskHandler(pUsbApp, &xMsg);
-#endif /* FREERTOS_ENABLE */
     (void)status;
 
     DBG_APP_TRACE("Cy_USB_AppSetIntfCallback << \r\n\r\n");
     return;
 }   /* end of function. */
 
-
-/*
- * Function: Cy_USB_AppZlpCallback()
- * Description: This Function will be called by USBD layer when
- *              ZLP message comes.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t, cy_stc_usb_cal_msg_t
- * return: void
+/**
+ * \name Cy_USB_AppZlpCallback
+ * \brief Callback function will be invoked by USBD when bus ZLP is received
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer context pointer
+ * \param pMsg USB Message
+ * \retval None
  */
 void
 Cy_USB_AppZlpCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
@@ -913,9 +859,7 @@ Cy_USB_AppZlpCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 {
     cy_stc_usb_app_ctxt_t *pAppCtxt;
     BaseType_t status;
-#if FREERTOS_ENABLE
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-#endif
     cy_stc_usbd_app_msg_t xMsg;
 
     /*
@@ -933,25 +877,21 @@ Cy_USB_AppZlpCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     /* Just make sure data also copied which contains endp addr and dir. */
     xMsg.data[0] = pMsg->data[0];
     xMsg.data[1] = pMsg->data[1];
-
-#if FREERTOS_ENABLE
     status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
-#else
-    Cy_USB_EchoDeviceTaskHandler(pAppCtxt, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     (void)status;
 
     return;
 }   /* end of function. */
 
-/*
- * Function: Cy_USB_AppL1SleepCallback()
- * Description: This Function will be called by USBD layer when
- *              L1 Sleep message comes.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t, cy_stc_usb_cal_msg_t
- * return: void
+/**
+ * \name Cy_USB_AppL1SleepCallback
+ * \brief Callback function will be invoked by USBD when L1 Sleep message comes.
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer context pointer
+ * \param pMsg USB Message
+ * \retval None
  */
 void
 Cy_USB_AppL1SleepCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
@@ -959,9 +899,7 @@ Cy_USB_AppL1SleepCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 {
     cy_stc_usb_app_ctxt_t *pAppCtxt;
     BaseType_t status;
-#if FREERTOS_ENABLE
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-#endif
     cy_stc_usbd_app_msg_t xMsg;
 
     DBG_APP_TRACE("AppL1SleepCb\r\n");
@@ -970,25 +908,20 @@ Cy_USB_AppL1SleepCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_L1_SLEEP;
     xMsg.data[0] = 0x00;
     xMsg.data[1] = 0x00;
-
-#if FREERTOS_ENABLE
     status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
-#else
-    Cy_USB_EchoDeviceTaskHandler(pAppCtxt, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     (void)status;
     return;
 }   /* end of function. */
 
-
-/*
- * Function: Cy_USB_AppL1ResumeCallback()
- * Description: This Function will be called by USBD layer when
- *              L1 Resume message comes.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t, cy_stc_usb_cal_msg_t
- * return: void
+/**
+ * \name Cy_USB_AppL1ResumeCallback
+ * \brief Callback function will be invoked by USBD when L1 Resume message comes.
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer context pointer
+ * \param pMsg USB Message
+ * \retval None
  */
 void
 Cy_USB_AppL1ResumeCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
@@ -996,9 +929,7 @@ Cy_USB_AppL1ResumeCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 {
     cy_stc_usb_app_ctxt_t *pAppCtxt;
     BaseType_t status;
-#if FREERTOS_ENABLE
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-#endif
     cy_stc_usbd_app_msg_t xMsg;
 
     DBG_APP_TRACE("AppL1ResumeCb\r\n");
@@ -1007,25 +938,20 @@ Cy_USB_AppL1ResumeCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_L1_RESUME;
     xMsg.data[0] = 0x00;
     xMsg.data[1] = 0x00;
-
-#if FREERTOS_ENABLE
     status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
-#else
-    Cy_USB_EchoDeviceTaskHandler(pAppCtxt, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     (void)status;
     return;
 }   /* end of function. */
 
-
-/*
- * Function: Cy_USB_AppSlpCallback()
- * Description: This Function will be called by USBD layer when 
- *              SLP message comes.  
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t, cy_stc_usb_cal_msg_t
- * return: void
+/**
+ * \name Cy_USB_AppSlpCallback
+ * \brief Callback function will be invoked by USBD when SLP message comes.
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer context pointer
+ * \param pMsg USB Message
+ * \retval None
  */
 void
 Cy_USB_AppSlpCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
@@ -1033,9 +959,7 @@ Cy_USB_AppSlpCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 {
     cy_stc_usb_app_ctxt_t *pAppCtxt;
     BaseType_t status;
-#if FREERTOS_ENABLE
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-#endif
     cy_stc_usbd_app_msg_t xMsg;
 
     DBG_APP_TRACE("AppSlpCb\r\n");
@@ -1054,24 +978,20 @@ Cy_USB_AppSlpCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     }
     xMsg.data[0] = pMsg->data[0];
     xMsg.data[1] = pMsg->data[1];
-
-#if FREERTOS_ENABLE
     status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
-#else
-    Cy_USB_EchoDeviceTaskHandler(pAppCtxt, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     (void)status;
     return;
 }   /* end of function. */
 
-/*
- * Function: Cy_USB_AppSetFeatureCallback()
- * Description: This Function will be called by USBD layer when
- *              set feature message comes.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t, cy_stc_usb_cal_msg_t
- * return: void
+/**
+ * \name Cy_USB_AppSetFeatureCallback
+ * \brief Callback function will be invoked by USBD when Set Feature comes.
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer context pointer
+ * \param pMsg USB Message
+ * \retval None
  */
 void
 Cy_USB_AppSetFeatureCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
@@ -1079,9 +999,7 @@ Cy_USB_AppSetFeatureCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 {
     cy_stc_usb_app_ctxt_t *pAppCtxt;
     BaseType_t status;
-#if FREERTOS_ENABLE
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-#endif
     cy_stc_usbd_app_msg_t xMsg;
 
     DBG_APP_INFO("AppSetFeatureCb\r\n");
@@ -1096,24 +1014,20 @@ Cy_USB_AppSetFeatureCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     xMsg.type = CY_USB_ECHO_DEVICE_SET_FEATURE;
     xMsg.data[0] = pMsg->data[0];
     xMsg.data[1] = pMsg->data[1];
-#if FREERTOS_ENABLE
     status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
-#else
-    Cy_USB_EchoDeviceTaskHandler(pAppCtxt, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     (void)status;
     return;
 }   /* end of function. */
 
-
-/*
- * Function: Cy_USB_AppClearFeatureCallback()
- * Description: This Function will be called by USBD layer when
- *              clear feature message comes.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t, cy_stc_usb_cal_msg_t
- * return: void
+/**
+ * \name Cy_USB_AppClearFeatureCallback
+ * \brief Callback function will be invoked by USBD when clear Feature comes.
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer context pointer
+ * \param pMsg USB Message
+ * \retval None
  */
 void
 Cy_USB_AppClearFeatureCallback (void *pUsbApp,
@@ -1122,9 +1036,7 @@ Cy_USB_AppClearFeatureCallback (void *pUsbApp,
 {
     cy_stc_usb_app_ctxt_t *pAppCtxt;
     BaseType_t status;
-#if FREERTOS_ENABLE
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-#endif
     cy_stc_usbd_app_msg_t xMsg;
 
     DBG_APP_INFO("AppClearFeatureCb\r\n");
@@ -1139,23 +1051,20 @@ Cy_USB_AppClearFeatureCallback (void *pUsbApp,
     xMsg.type = CY_USB_ECHO_DEVICE_CLEAR_FEATURE;
     xMsg.data[0] = pMsg->data[0];
     xMsg.data[1] = pMsg->data[1];
-#if FREERTOS_ENABLE
     status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
-#else
-    Cy_USB_EchoDeviceTaskHandler(pAppCtxt, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     (void)status;
     return;
 }   /* end of function. */
 
-
-/*
- * Function: Cy_USB_HandleEchoDevieReqs()
- * Description: This Function handles all request related to echo device.
- * Parameter: pAppCtxt, cy_stc_usb_usbd_ctxt_t
- * return: void
+/**
+ * \name Cy_USB_HandleEchoDevieReqs
+ * \brief This Function handles all request related to echo device.
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer context pointer
+ * \param pMsg USB Message
+ * \retval None
  */
 void
 Cy_USB_HandleEchoDevieReqs (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt)
@@ -1215,7 +1124,6 @@ Cy_USB_HandleEchoDevieReqs (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt)
 
         if ((bRequest == 0xF0) && (bmRequest == 0xC0)) {
             /* Device capability request */
-            /* TBD: Prepare data and then send the same. */
             retCode = CY_USB_APP_STATUS_SUCCESS;
             break;
         }
@@ -1227,6 +1135,3 @@ Cy_USB_HandleEchoDevieReqs (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt)
                                       CY_USB_ENDP_DIR_IN, TRUE);
     }
 }   /* end of function. */
-
-
-

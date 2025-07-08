@@ -5,9 +5,9 @@
 * Implements the data loopback and source/sink logic for the FX2G3 USB Echo
 * Device application.
 *
-*******************************************************************************
+*
 * \copyright
-* (c) (2024), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2025), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -23,7 +23,7 @@
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 * See the License for the specific language governing permissions and
 * limitations under the License.
-*******************************************************************************/
+*/
 
 #include "FreeRTOS.h"
 #include "queue.h"
@@ -50,6 +50,7 @@ cy_stc_usb_echo_dev_ctxt_t echoDevCtxt;
 
 extern void OutEpDma_ISR(uint8_t endpNumber);
 extern void InEpDma_ISR(uint8_t endpNumber);
+extern cy_stc_hbdma_buf_mgr_t HBW_BufMgr;
 
 cy_israddress GetEPInDmaIsr(uint8_t epNum);
 cy_israddress GetEPOutDmaIsr(uint8_t epNum);
@@ -64,13 +65,27 @@ extern volatile uint16_t pktType;
 extern volatile uint16_t pktLength;
 
 extern uint32_t Ep0TestBuffer[1024U];
-extern uint32_t SetSelDataBuffer[8];
 
-/*
- * Function: Cy_USB_InitializeWriteBuffer()
- * Description: Initialize egress/write buffer to a value.
- * Parameter: pWriteBuffer, len
- * return: void
+
+
+static void Cy_USB_App_KeepLinkActive (cy_stc_usb_app_ctxt_t *pAppCtxt)
+{
+#if LPM_ENABLE
+    if (pAppCtxt->isLpmEnabled) {
+        /* Disable LPM for 100 ms after any DMA transfers have been completed. */
+        Cy_USBD_LpmDisable(pAppCtxt->pUsbdCtxt);
+        pAppCtxt->isLpmEnabled  = false;
+    }
+
+    pAppCtxt->lpmEnableTime = Cy_USBD_GetTimerTick() + 100;
+#endif /* LPM_ENABLE */
+}
+
+/**
+ * \name Cy_USB_InitializeWriteBuffer
+ * \brief This Function initialize egress/write buffer to a value.
+ * \param pUsbdCtxt USBD layer context pointer
+ * \retval None
  */
 void 
 Cy_USB_InitializeWriteBuffer (uint8_t *pWriteBuffer, uint32_t len)
@@ -89,11 +104,12 @@ Cy_USB_InitializeWriteBuffer (uint8_t *pWriteBuffer, uint32_t len)
     }
 }   /* End of function */
 
-/*
- * Function: Cy_USB_InitializeReadBuffer()
- * Description: Initialize ingress/read buffer to a value.
- * Parameter: pWriteBuffer, len
- * return: void
+/**
+ * \name Cy_USB_InitializeReadBuffer
+ * \brief This Function initialize ingress/read buffer to a value.
+ * \param pReadBuffer read buffer pointer
+ * \param len length of data read
+ * \retval None
  */
 void 
 Cy_USB_InitializeReadBuffer (uint8_t *pReadBuffer, uint32_t len)
@@ -106,68 +122,33 @@ Cy_USB_InitializeReadBuffer (uint8_t *pReadBuffer, uint32_t len)
     return;
 }   /* End of function */
 
-/*
- * Function: Cy_USB_App_FreeAllDmaBuffers()
- * Description: Clears all DMA buffer allocations made from the application context.
- * Parameter: cy_stc_usb_app_ctxt_t *pAppCtxt
- * return: None
- */
-void Cy_USB_App_FreeAllDmaBuffers(cy_stc_usb_app_ctxt_t *pAppCtxt)
-{
-    if (pAppCtxt != NULL) {
-        memset((uint8_t *)pAppCtxt->epDmaBufSpace, 0, RAM_BUF_SZ_WORDS * sizeof(uint32_t));
-        pAppCtxt->dmaBufFreeIdx = 0;
-    }
-}
-
-/*
- * Function: Cy_USB_App_GetFreeDmaSize()
- * Description: Retrieve the free DMA buffer space available in the application context.
- * Parameter: cy_stc_usb_app_ctxt_t *pAppCtxt
- * return: Amount of available buffer space in bytes.
- */
-uint32_t Cy_USB_App_GetFreeDmaSize(cy_stc_usb_app_ctxt_t *pAppCtxt)
-{
-    uint32_t freeBufSize = 0;
-
-    if (pAppCtxt != NULL) {
-        freeBufSize = (RAM_BUF_SZ_WORDS - pAppCtxt->dmaBufFreeIdx) * sizeof(uint32_t);
-    }
-
-    return freeBufSize;
-}
-/*
- * Function: Cy_USB_App_GetDmaBuffer()
- * Description: Obtain a RAM buffer of specified size for DMA data transfers.
- * Parameter: cy_stc_usb_app_ctxt_t *pAppCtxt, uint16_t sz_bytes
- * return: Pointer to RAM buffer, NULL in case of error.
+/**
+ * \name Cy_USB_App_GetDmaBuffer
+ * \brief This Function obtains a HBDMA (SRAM) buffer of specified size for DMA data transfers.
+ * \param pAppCtxt application layer context pointer
+ * \param sz_bytes size of data
+ * \retval None
  */
 uint8_t *Cy_USB_App_GetDmaBuffer(cy_stc_usb_app_ctxt_t *pAppCtxt, uint16_t sz_bytes)
 {
     uint8_t *buf_p = NULL;
-    uint16_t sz_words = ((sz_bytes + 3u) >> 2u);
 
-    if (
-            (pAppCtxt != NULL) &&
-            (sz_bytes != 0) &&
-            ((RAM_BUF_SZ_WORDS - pAppCtxt->dmaBufFreeIdx) >= sz_words)
-       )
+    if ((pAppCtxt != NULL) && (sz_bytes != 0))
     {
-        buf_p = (uint8_t *)(pAppCtxt->epDmaBufSpace + pAppCtxt->dmaBufFreeIdx);
-        pAppCtxt->dmaBufFreeIdx += sz_words;
+        buf_p = (uint8_t*)Cy_HBDma_BufMgr_Alloc(&HBW_BufMgr,sz_bytes);
     }
 
     return buf_p;
 }
 
-/*
- * Function: Cy_InitIfxQueue()
- * Description: Initialize queue which is part of echodevice context.
- *              For each endpoint one queue is allocated. Queue for
- *              endpoint 0 should be ignored so always starts for endpoint
- *              one.
- * Parameter: cy_stc_usb_echo_dev_ctxt_t
- * return: void
+/**
+ * \name Cy_InitIfxQueue
+ * \brief This Function initialize queue which is part of echodevice context.
+ * \details For each endpoint one queue is allocated. Queue for
+ *          endpoint 0 should be ignored so always starts for endpoint one.
+ * \param pAppCtxt application layer context pointer
+ * \param pEchoDevCtxt echo device context pointer
+ * \retval None
  */
 void
 Cy_InitIfxQueue (cy_stc_usb_app_ctxt_t *pAppCtxt, cy_stc_usb_echo_dev_ctxt_t *pEchoDevCtxt)
@@ -205,13 +186,12 @@ Cy_InitIfxQueue (cy_stc_usb_app_ctxt_t *pAppCtxt, cy_stc_usb_echo_dev_ctxt_t *pE
     return;
 }   /* End of function */
 
-
-/*
- * Function: Cy_DevSpeedBasedfxQueueUpdate()
- * Description: Based on speed, need to update different pointer including
- *              data pointer.
- * Parameter: cy_stc_usb_echo_dev_ctxt_t, cy_en_usb_speed_t
- * return: void
+/**
+ * \name Cy_DevSpeedBasedfxQueueUpdate
+ * \brief Based on speed, need to update different pointer including data pointer.
+ * \param pApp application layer context pointer
+ * \param devSpeed USB device speed
+ * \retval None
  */
 void
 Cy_DevSpeedBasedfxQueueUpdate (void *pApp,
@@ -241,34 +221,24 @@ Cy_DevSpeedBasedfxQueueUpdate (void *pApp,
     return;
 }   /* End of function */
 
-
-#if !FREERTOS_ENABLE
-uint32_t xferLength;
-Cy_IfxQueue_t *pDataQ;
-uint32_t writeIndex = 0x00, readIndex = 0x00, numElem = 0x00;
-uint8_t *pBuffer;
-uint16_t ssDataSize;
-#endif /* !FREERTOS_ENABLE */
-
-/*
- * Function: Cy_USB_EchoDeviceInit()
- * Description: Initialize EchoDevice for source/sink.
- * Parameter: cy_stc_usb_app_ctxt_t
- * return: void
+/**
+ * \name Cy_USB_EchoDeviceInit
+ * \brief function to initialize EchoDevice for source/sink.
+ * \param pAppCtxt application layer context pointer
+ * \retval None
  */
-void  *
+void *
 Cy_USB_EchoDeviceInit (cy_stc_usb_app_ctxt_t *pAppCtxt)
 {
     Cy_InitIfxQueue(pAppCtxt, &echoDevCtxt);
     return ((void *)(&echoDevCtxt));
 }   /* End of function. */
 
-
-/*
- * Function: Cy_USB_EchoDevicePrepareToStartDataXfer()
- * Description: It takes care of all preparation to start data transfer.
- * Parameter: cy_stc_usb_app_ctxt_t
- * return: void
+/**
+ * \name Cy_USB_EchoDevicePrepareToStartDataXfer
+ * \brief Function takes care of all preparation to start data transfer.
+ * \param pAppCtxt application layer context pointer
+ * \retval None
  */
 void
 Cy_USB_EchoDevicePrepareToStartDataXfer (cy_stc_usb_app_ctxt_t *pAppCtxt)
@@ -327,12 +297,12 @@ Cy_USB_EchoDevicePrepareToStartDataXfer (cy_stc_usb_app_ctxt_t *pAppCtxt)
     return;
 }   /* end of function */
 
-
-/*
- * Function: Cy_USB_EchoDeviceHandleWriteComplete()
- * Description: It takes care of WRITE-COMPLETE message.
- * Parameter: cy_stc_usb_app_ctxt_t, endpAddr
- * return: void
+/**
+ * \name Cy_USB_EchoDeviceHandleWriteComplete
+ * \brief Function takes care of takes care of WRITE-COMPLETE message.
+ * \param pAppCtxt application layer context pointer
+ * \param endpAddr USB endpoint address
+ * \retval None
  */
 void
 Cy_USB_EchoDeviceHandleWriteComplete (cy_stc_usb_app_ctxt_t *pAppCtxt,
@@ -433,12 +403,12 @@ Cy_USB_EchoDeviceHandleWriteComplete (cy_stc_usb_app_ctxt_t *pAppCtxt,
     return;
 }   /* End of function */
 
-
-/*
- * Function: Cy_USB_EchoDeviceHandleReadComplete()
- * Description: It takes care of READ-COMPLETE message.
- * Parameter: cy_stc_usb_app_ctxt_t, endpAddr
- * return: void
+/**
+ * \name Cy_USB_EchoDeviceHandleReadComplete
+ * \brief Function takes care of takes care of READ-COMPLETE message.
+ * \param pAppCtxt application layer context pointer
+ * \param endpAddr USB endpoint address
+ * \retval None
  */
 void
 Cy_USB_EchoDeviceHandleReadComplete (cy_stc_usb_app_ctxt_t *pAppCtxt,
@@ -548,12 +518,13 @@ Cy_USB_EchoDeviceHandleReadComplete (cy_stc_usb_app_ctxt_t *pAppCtxt,
     return;
 }   /* end of function */
 
+/**
+ * \name Cy_USB_EchoDeviceHandleZlpIn
 
-/*
- * Function: Cy_USB_EchoDeviceHandleZlpIn()
- * Description: It takes care of IN-ZLP message.
- * Parameter: cy_stc_usb_app_ctxt_t, endpAddr
- * return: void
+ * \brief Function takes care of takes care of IN_ZLP message.
+ * \param pAppCtxt application layer context pointer
+ * \param endpAddr USB endpoint address
+ * \retval None
  */
 void
 Cy_USB_EchoDeviceHandleZlpIn (cy_stc_usb_app_ctxt_t *pAppCtxt,
@@ -672,12 +643,12 @@ Cy_USB_EchoDeviceHandleZlpIn (cy_stc_usb_app_ctxt_t *pAppCtxt,
     return;
 }   /* end of function */
 
-
-/*
- * Function: Cy_USB_EchoDeviceHandleZlpOut()
- * Description: It takes care of OUT-ZLP message.
- * Parameter: cy_stc_usb_app_ctxt_t, endpAddr
- * return: void
+/**
+ * \name Cy_USB_EchoDeviceHandleZlpOut
+ * \brief Function takes care of takes care of OUT-ZLP message.
+ * \param pAppCtxt application layer context pointer
+ * \param endpAddr USB endpoint address
+ * \retval None
  */
 void
 Cy_USB_EchoDeviceHandleZlpOut (cy_stc_usb_app_ctxt_t *pAppCtxt,
@@ -792,20 +763,15 @@ Cy_USB_EchoDeviceHandleZlpOut (cy_stc_usb_app_ctxt_t *pAppCtxt,
     return;
 }   /* end of function */
 
-
-/*
- * Function: Cy_USB_EchoDeviceTaskHandler()
- * Description: This function handles data transfer for source/sink echo device.
- * Parameter: pTaskParam
- * return: void
+/**
+ * \name Cy_USB_EchoDeviceTaskHandler
+ * \brief This function handles data transfer for source/sink echo device.
+ * \param pTaskParam Task param
+ * \param qMsg messgae queue pointer
+ * \retval None
  */
-#if FREERTOS_ENABLE
 void 
 Cy_USB_EchoDeviceTaskHandler (void *pTaskParam)
-#else
-void 
-Cy_USB_EchoDeviceTaskHandler (void *pTaskParam, void* qMsg)
-#endif /* FREERTOS_ENABLE */
 {
     Cy_IfxQueue_t *pIfxQueue;
     cy_stc_usb_app_ctxt_t *pAppCtxt;
@@ -821,7 +787,6 @@ Cy_USB_EchoDeviceTaskHandler (void *pTaskParam, void* qMsg)
 
     pEchoDevCtxt = (cy_stc_usb_echo_dev_ctxt_t *)pAppCtxt->pDevFuncCtxt;
 
-#if FREERTOS_ENABLE
     BaseType_t xStatus;
     uint32_t xferLength;
     uint8_t *pBuffer;
@@ -846,6 +811,20 @@ Cy_USB_EchoDeviceTaskHandler (void *pTaskParam, void* qMsg)
         KickWDT();
 #endif /* WATCHDOG_RESET_EN */
 
+#if LPM_ENABLE
+        if ((pAppCtxt->isLpmEnabled == false) && (pAppCtxt->lpmEnableTime != 0)) {
+
+            if (
+                    (Cy_USBD_GetTimerTick() >= pAppCtxt->lpmEnableTime)
+               )
+            {
+                pAppCtxt->isLpmEnabled  = true;
+                pAppCtxt->lpmEnableTime = 0;
+                Cy_USBD_LpmEnable(pAppCtxt->pUsbdCtxt);
+            }
+        }
+#endif /* LPM_ENABLE */
+
         /*
          * Wait until some data is received from the queue.
          * Timeout after 100 ms.
@@ -857,15 +836,212 @@ Cy_USB_EchoDeviceTaskHandler (void *pTaskParam, void* qMsg)
                 idleLoopCnt = 0;
                 DBG_APP_INFO("TaskIdle\r\n");
             }
-
-            continue;
         }
-        idleLoopCnt = 0;
-#else /* !FREERTOS_ENABLE */
+        else
+        {
+            idleLoopCnt = 0;
+            endpAddr = queueMsg.data[0];
+            endpNum = (endpAddr & CY_USBD_ENDP_NUM_MASK);
 
-        memcpy((uint8_t *)&queueMsg, (uint8_t *)qMsg,
-                sizeof(cy_stc_usbd_app_msg_t));
-#endif /* FREERTOS_ENABLE */
+            switch (queueMsg.type) {
+    		 case CY_USB_VBUS_CHANGE_INTR:
+                  /* Start the debounce timer. */
+                  xTimerStart(pAppCtxt->vbusDebounceTimer, 0);
+                  break;
+
+              case CY_USB_VBUS_CHANGE_DEBOUNCED:
+            	  DBG_APP_INFO("CY_USB_VBUS_CHANGE_DEBOUNCED \n\r");
+                  /* Check whether VBus state has changed. */
+                  pAppCtxt->vbusPresent = (Cy_GPIO_Read(VBUS_DETECT_GPIO_PORT, VBUS_DETECT_GPIO_PIN) == VBUS_DETECT_STATE);
+
+                  if (pAppCtxt->vbusPresent) {
+                      if (!pAppCtxt->usbConnected) {
+                          DBG_APP_INFO("Enabling USB connection due to VBus detect\r\n");
+                          Cy_USB_ConnectionEnable(pAppCtxt);
+                      }
+                  } else {
+                      if (pAppCtxt->usbConnected) {
+                          DBG_APP_INFO("Disabling USB connection due to VBus removal\r\n");
+                          Cy_USB_ConnectionDisable(pAppCtxt);
+                      }
+                  }
+                  break;
+
+                case CY_USB_ECHO_DEVICE_MSG_SETUP_DATA_XFER:
+                    /*
+                    * setup_data should be common for src/snk and loopback.
+                    * Initialize endpoint number, max packet size.
+                    * Device endpoint related to interface/functionality starts 
+                    * from endpoint 1 (if there).
+                    * For loopback endpoint pair will be 1-1,2-2...15-15.
+                    */
+                    DBG_APP_TRACE("MsgSetupDataXfer\r\n");
+                    for (endpNum = 0x01; endpNum < CY_USB_NUM_ENDP_CONFIGURED; endpNum++) {
+                        pIfxQueue = &(pEchoDevCtxt->dataQueue[endpNum]);
+                        pIfxQueue->endpNumOut = endpNum;
+
+                        pIfxQueue->maxPktSizeOut =
+                        Cy_USB_AppGetMaxPktSize(pAppCtxt, endpNum,
+                                                CY_USB_ENDP_DIR_OUT);
+
+                        pIfxQueue->readLength = pIfxQueue->maxPktSizeOut;
+                        pIfxQueue->endpNumIn = endpNum;
+
+                        pIfxQueue->maxPktSizeIn =
+                        Cy_USB_AppGetMaxPktSize(pAppCtxt, endpNum,
+                                                CY_USB_ENDP_DIR_IN);
+
+                        pIfxQueue->writeLength = pIfxQueue->maxPktSizeIn;
+                    }
+                    break;
+
+                case CY_USB_ECHO_DEVICE_MSG_START_DATA_XFER:
+                    DBG_APP_TRACE("MsgStartDataXfer\r\n");
+                    Cy_USB_EchoDevicePrepareToStartDataXfer(pAppCtxt);
+                    break;
+    
+                case CY_USB_ECHO_DEVICE_MSG_STOP_DATA_XFER:
+                    /* same for loopback and src/sink */
+                    for (endpNum = 0x01; endpNum < CY_USB_NUM_ENDP_CONFIGURED; endpNum++) {
+                        pIfxQueue = &(pEchoDevCtxt->dataQueue[endpNum]);
+                        pIfxQueue->readActive = false;
+                        pIfxQueue->writeActive = false;
+                        pIfxQueue->readIndex  = 0x00;
+                        pIfxQueue->writeIndex = 0x00;
+                        pIfxQueue->numElem    = 0x00;
+                    }
+                    break;
+
+                case CY_USB_ECHO_DEVICE_MSG_READ_COMPLETE:
+                    DBG_APP_TRACE("MsgReadComp\r\n");
+                    Cy_USB_EchoDeviceHandleReadComplete(pAppCtxt, endpAddr);
+                    break;
+
+                case CY_USB_ECHO_DEVICE_MSG_WRITE_COMPLETE:
+                    DBG_APP_TRACE("MsgWriteComp\r\n");
+                    Cy_USB_EchoDeviceHandleWriteComplete(pAppCtxt, endpAddr);
+                    break;
+
+                case CY_USB_ECHO_DEVICE_MSG_ZLP_OUT:
+                    DBG_APP_TRACE("MsgZlpOut\r\n");
+                    Cy_USB_EchoDeviceHandleZlpOut(pAppCtxt, endpAddr);
+                    break;
+
+                case CY_USB_ECHO_DEVICE_MSG_SLP_OUT:
+                    /*
+                    * Common:
+                    * Get new Xfer Length.
+                    * At the end clear interrupt.
+                    *
+                    * Loopback:::
+                    * One DMA channel is already active (otherwise device will
+                    * send NAK) so with SLP interrupt only xfer length is
+                    * updated.
+                    * No change in any Index.
+                    * Then initiate DMA xfer.
+                    *
+                    * Src/Snk:::
+                    * Just initiate read with new xfer length.
+                    */
+                    DBG_APP_TRACE("EchoMsgSlpOut for  endp:0x%x\r\n", endpNum);
+                    pIfxQueue = &(pEchoDevCtxt->dataQueue[endpNum]);
+                    xferLength = queueMsg.data[1];
+
+                    if (echodevice == ECHO_DEVICE_LOOPBACK) {
+                        /*
+                        * It means means DMA already submitted but due to SLP
+                        * need to re-submit DMA. all other index should
+                        * remain same. Only length should be changed.
+                        */
+                        pBuffer = pIfxQueue->elem[pIfxQueue->readIndex].pData;
+                        pIfxQueue->elem[pIfxQueue->readIndex].dataLen = xferLength;
+                        DBG_APP_INFO("SLP-OUT endpNum::0x%x xferLen:0x%x\r\n",
+                                    pIfxQueue->endpNumOut, xferLength);
+                        Cy_USB_AppQueueRead(pAppCtxt, pIfxQueue->endpNumOut,
+                                            pBuffer, xferLength);
+                        pIfxQueue->readActive = true;
+                    } else {
+                        Cy_USB_AppQueueRead(pAppCtxt, pIfxQueue->endpNumOut,
+                                            pIfxQueue->pReadBuffer, xferLength);
+                    }
+
+                    /* Send trigger to DMA channel so that DMA transfer is completed. */
+                    Cy_TrigMux_SwTrigger(TRIG_IN_MUX_0_USBHSDEV_TR_OUT0 + pIfxQueue->endpNumOut,
+                                        CY_TRIGGER_TWO_CYCLES);
+                    break;
+
+                case CY_USB_ECHO_DEVICE_MSG_ZLP_IN:
+                    DBG_APP_TRACE("MsgZlpIn\r\n");
+                    Cy_USB_EchoDeviceHandleZlpIn(pAppCtxt, endpAddr);
+                    break;
+
+                case CY_USB_ECHO_DEVICE_MSG_SLP_IN:
+                    /*
+                    * Loopback:::
+                    * In SLP also some data are sent so WRITE_COMPLETE message
+                    * will be sent through DMA interrupt. In WRITE_COMPLETE case,
+                    * Initiate next write. Here just clear interrupt.
+                    *
+                    * Src/Snk:::
+                    * Same case as loopback. Just need to clear SLP interrupt.
+                    */
+                    DBG_APP_TRACE("EchoMsgSlpIN\r\n");
+                    pIfxQueue = &(pEchoDevCtxt->dataQueue[endpNum]);
+                    /* clear SLP interrupt. */
+                    Cy_USBD_ClearZlpSlpIntrEnableMask(pAppCtxt->pUsbdCtxt,
+                                                    pIfxQueue->endpNumIn,
+                                                    CY_USB_ENDP_DIR_IN,
+                                                    CY_USB_ARG_SLP);
+                    break;
+
+                case CY_USB_ECHO_DEVICE_MSG_CTRL_XFER_SETUP:
+                    DBG_APP_TRACE("CY_USB_ECHO_DEVICE_MSG_CTRL_XFER_SETUP\r\n");
+                    Cy_USB_EchoDeviceHandleCtrlSetup((void *)pAppCtxt, &queueMsg);
+                    break;
+
+                case CY_USB_ECHO_DEVICE_SET_FEATURE:
+                    DBG_APP_INFO("EchoMsgSetFeature\r\n");
+                    Cy_USBD_SendAckSetupDataStatusStage(pAppCtxt->pUsbdCtxt);
+                    break;
+
+                case CY_USB_ECHO_DEVICE_CLEAR_FEATURE:
+                    DBG_APP_INFO("EchoMsgClearFeature\r\n");
+                    Cy_USBD_SendAckSetupDataStatusStage(pAppCtxt->pUsbdCtxt);
+                    break;
+
+                case CY_USB_ENDP0_READ_COMPLETE:
+                    DBG_APP_INFO("Endp0ReadComplete\r\n");
+                    /* Here application gets the data. */
+                    break;
+
+                case CY_USB_ENDP0_READ_TIMEOUT:
+                    DBG_APP_INFO("Endp0ReadTimeout\r\n");
+                    /*
+                    * When application layer wants to recieve data from
+                    * host through endpoint 0 then device initiate RcvEndp0
+                    * function call and start timer. When timer ends and still
+                    * data is not recieved then TIMER interrupt will send
+                    * CY_USB_ENDP0_READ_TIMEOUT message. If data is recieved then
+                    * case which handles data should stop timer.
+                    */
+                    Cy_USB_USBD_RetireRecvEndp0Data(pAppCtxt->pUsbdCtxt);
+                    break;
+
+                case CY_USB_ECHO_DEVICE_MSG_L1_SLEEP:
+                    DBG_APP_TRACE("CY_USB_ECHO_DEVICE_MSG_L1_SLEEP\r\n");
+                    /* Ass off now nothing needs to be done here. */
+                    break;
+
+                case CY_USB_ECHO_DEVICE_MSG_L1_RESUME:
+                    DBG_APP_TRACE("CY_USB_ECHO_DEVICE_MSG_L1_RESUME\r\n");
+                    /* Ass off now nothing needs to be done here. */
+                    break;
+
+                default:
+                    DBG_APP_ERR("EchoMsgDefault %d\r\n", queueMsg.type);
+                    break;
+            }   /* end of switch() */
+        }
 
         /*
          * If the link has been in USB2-L1 for more than 0.5 seconds, initiate LPM exit so that
@@ -881,217 +1057,15 @@ Cy_USB_EchoDeviceTaskHandler (void *pTaskParam, void* qMsg)
             lpEntryTime = Cy_USBD_GetTimerTick();
         }
 
-        endpAddr = queueMsg.data[0];
-        endpNum = (endpAddr & CY_USBD_ENDP_NUM_MASK);
-
-        switch (queueMsg.type) {
-            case CY_USB_VBUS_DETECT_PRESENT:
-                if ((pAppCtxt->vbusPresent == true) &&
-                     (pAppCtxt->usbConnectDone == false)) {
-                    DBG_APP_INFO("Connect due to VBus presence\r\n");
-                    while (pAppCtxt->usbConnectDone == false) {
-                        if (!Cy_USB_ConnectionEnable(pAppCtxt)) {
-                            DBG_APP_INFO("Calling\r\n");
-                            Cy_USB_AppLightDisable(pAppCtxt);
-                            Cy_SysLib_Delay(100);
-                        }
-                    }
-                }
-                break;
-
-            case CY_USB_VBUS_DETECT_ABSENT:
-                if ((pAppCtxt->usbConnectDone == true) &&
-                    (pAppCtxt->vbusPresent == false)) {
-                    DBG_APP_INFO("Disconnect due to VBus loss\r\n");
-                    Cy_USB_ConnectionDisable(pAppCtxt);
-                }
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_SETUP_DATA_XFER:
-                /*
-                 * setup_data should be common for src/snk and loopback.
-                 * Initialize endpoint number, max packet size.
-                 * Device endpoint related to interface/functionality starts 
-                 * from endpoint 1 (if there).
-                 * For loopback endpoint pair will be 1-1,2-2...15-15.
-                 */
-                DBG_APP_TRACE("MsgSetupDataXfer\r\n");
-                for (endpNum = 0x01; endpNum < CY_USB_NUM_ENDP_CONFIGURED; endpNum++) {
-                    pIfxQueue = &(pEchoDevCtxt->dataQueue[endpNum]);
-                    pIfxQueue->endpNumOut = endpNum;
-
-                    pIfxQueue->maxPktSizeOut =
-                    Cy_USB_AppGetMaxPktSize(pAppCtxt, endpNum,
-                                            CY_USB_ENDP_DIR_OUT);
-
-                    pIfxQueue->readLength = pIfxQueue->maxPktSizeOut;
-                    pIfxQueue->endpNumIn = endpNum;
-
-                    pIfxQueue->maxPktSizeIn =
-                    Cy_USB_AppGetMaxPktSize(pAppCtxt, endpNum,
-                                            CY_USB_ENDP_DIR_IN);
-
-                    pIfxQueue->writeLength = pIfxQueue->maxPktSizeIn;
-                }
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_START_DATA_XFER:
-                DBG_APP_TRACE("MsgStartDataXfer\r\n");
-                Cy_USB_EchoDevicePrepareToStartDataXfer(pAppCtxt);
-                break;
- 
-            case CY_USB_ECHO_DEVICE_MSG_STOP_DATA_XFER:
-                /* same for loopback and src/sink */
-                for (endpNum = 0x01; endpNum < CY_USB_NUM_ENDP_CONFIGURED; endpNum++) {
-                    pIfxQueue = &(pEchoDevCtxt->dataQueue[endpNum]);
-                    pIfxQueue->readActive = false;
-                    pIfxQueue->writeActive = false;
-                    pIfxQueue->readIndex  = 0x00;
-                    pIfxQueue->writeIndex = 0x00;
-                    pIfxQueue->numElem    = 0x00;
-                }
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_READ_COMPLETE:
-                DBG_APP_TRACE("MsgReadComp\r\n");
-                Cy_USB_EchoDeviceHandleReadComplete(pAppCtxt, endpAddr);
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_WRITE_COMPLETE:
-                DBG_APP_TRACE("MsgWriteComp\r\n");
-                Cy_USB_EchoDeviceHandleWriteComplete(pAppCtxt, endpAddr);
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_ZLP_OUT:
-                DBG_APP_TRACE("MsgZlpOut\r\n");
-                Cy_USB_EchoDeviceHandleZlpOut(pAppCtxt, endpAddr);
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_SLP_OUT:
-                /*
-                 * Common:
-                 * Get new Xfer Length.
-                 * At the end clear interrupt.
-                 *
-                 * Loopback:::
-                 * One DMA channel is already active (otherwise device will
-                 * send NAK) so with SLP interrupt only xfer length is
-                 * updated.
-                 * No change in any Index.
-                 * Then initiate DMA xfer.
-                 *
-                 * Src/Snk:::
-                 * Just initiate read with new xfer length.
-                 */
-                DBG_APP_TRACE("EchoMsgSlpOut for  endp:0x%x\r\n", endpNum);
-                pIfxQueue = &(pEchoDevCtxt->dataQueue[endpNum]);
-                xferLength = queueMsg.data[1];
-
-                if (echodevice == ECHO_DEVICE_LOOPBACK) {
-                    /*
-                     * It means means DMA already submitted but due to SLP
-                     * need to re-submit DMA. all other index should
-                     * remain same. Only length should be changed.
-                     */
-                    pBuffer = pIfxQueue->elem[pIfxQueue->readIndex].pData;
-                    pIfxQueue->elem[pIfxQueue->readIndex].dataLen = xferLength;
-                    DBG_APP_INFO("SLP-OUT endpNum::0x%x xferLen:0x%x\r\n",
-                                 pIfxQueue->endpNumOut, xferLength);
-                    Cy_USB_AppQueueRead(pAppCtxt, pIfxQueue->endpNumOut,
-                                        pBuffer, xferLength);
-                    pIfxQueue->readActive = true;
-                } else {
-                    Cy_USB_AppQueueRead(pAppCtxt, pIfxQueue->endpNumOut,
-                                        pIfxQueue->pReadBuffer, xferLength);
-                }
-
-                /* Send trigger to DMA channel so that DMA transfer is completed. */
-                Cy_TrigMux_SwTrigger(TRIG_IN_MUX_0_USBHSDEV_TR_OUT0 + pIfxQueue->endpNumOut,
-                                     CY_TRIGGER_TWO_CYCLES);
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_ZLP_IN:
-                DBG_APP_TRACE("MsgZlpIn\r\n");
-                Cy_USB_EchoDeviceHandleZlpIn(pAppCtxt, endpAddr);
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_SLP_IN:
-                /*
-                 * Loopback:::
-                 * In SLP also some data are sent so WRITE_COMPLETE message
-                 * will be sent through DMA interrupt. In WRITE_COMPLETE case,
-                 * Initiate next write. Here just clear interrupt.
-                 *
-                 * Src/Snk:::
-                 * Same case as loopback. Just need to clear SLP interrupt.
-                 */
-                DBG_APP_TRACE("EchoMsgSlpIN\r\n");
-                pIfxQueue = &(pEchoDevCtxt->dataQueue[endpNum]);
-                /* clear SLP interrupt. */
-                Cy_USBD_ClearZlpSlpIntrEnableMask(pAppCtxt->pUsbdCtxt,
-                                                  pIfxQueue->endpNumIn,
-                                                  CY_USB_ENDP_DIR_IN,
-                                                  CY_USB_ARG_SLP);
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_CTRL_XFER_SETUP:
-                DBG_APP_TRACE("CY_USB_ECHO_DEVICE_MSG_CTRL_XFER_SETUP\r\n");
-                Cy_USB_EchoDeviceHandleCtrlSetup((void *)pAppCtxt, &queueMsg);
-                break;
-
-            case CY_USB_ECHO_DEVICE_SET_FEATURE:
-                DBG_APP_INFO("EchoMsgSetFeature\r\n");
-                Cy_USBD_SendAckSetupDataStatusStage(pAppCtxt->pUsbdCtxt);
-                break;
-
-            case CY_USB_ECHO_DEVICE_CLEAR_FEATURE:
-                DBG_APP_INFO("EchoMsgClearFeature\r\n");
-                Cy_USBD_SendAckSetupDataStatusStage(pAppCtxt->pUsbdCtxt);
-                break;
-
-            case CY_USB_ENDP0_READ_COMPLETE:
-                DBG_APP_INFO("Endp0ReadComplete\r\n");
-                /* Here application gets the data. */
-                break;
-
-            case CY_USB_ENDP0_READ_TIMEOUT:
-                DBG_APP_INFO("Endp0ReadTimeout\r\n");
-                /*
-                 * When application layer wants to recieve data from
-                 * host through endpoint 0 then device initiate RcvEndp0
-                 * function call and start timer. When timer ends and still
-                 * data is not recieved then TIMER interrupt will send
-                 * CY_USB_ENDP0_READ_TIMEOUT message. If data is recieved then
-                 * case which handles data should stop timer.
-                 */
-                Cy_USB_USBD_RetireRecvEndp0Data(pAppCtxt->pUsbdCtxt);
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_L1_SLEEP:
-                DBG_APP_TRACE("CY_USB_ECHO_DEVICE_MSG_L1_SLEEP\r\n");
-                /* Ass off now nothing needs to be done here. */
-                break;
-
-            case CY_USB_ECHO_DEVICE_MSG_L1_RESUME:
-                DBG_APP_TRACE("CY_USB_ECHO_DEVICE_MSG_L1_RESUME\r\n");
-                /* Ass off now nothing needs to be done here. */
-                break;
-
-            default:
-                DBG_APP_ERR("EchoMsgDefault %d\r\n", queueMsg.type);
-                break;
-        }   /* end of switch() */
-#if FREERTOS_ENABLE
     } while (1);
-#endif /* FREERTOS_ENABLE */
 }   /* End of function  */
 
-
-/*
- * Function: Cy_USB_EchoDeviceHandleCtrlSetup()
- * Description: This function handles control command given to application.
- * Parameter: pApp, pMsg
- * return: void
+/**
+ * \name Cy_USB_EchoDeviceHandleCtrlSetup
+ * \brief This function handles control command given to application.
+ * \param pApp application layer context pointer
+ * \param pMsg app messgae queue pointer
+ * \retval None
  */
 void
 Cy_USB_EchoDeviceHandleCtrlSetup (void *pApp, cy_stc_usbd_app_msg_t *pMsg)
@@ -1105,6 +1079,7 @@ Cy_USB_EchoDeviceHandleCtrlSetup (void *pApp, cy_stc_usbd_app_msg_t *pMsg)
     uint16_t wValue, wIndex, wLength;
     uint8_t   reqType;
     bool isReqHandled = false;
+    uint8_t loopCount = 250u;
 
     pAppCtxt = (cy_stc_usb_app_ctxt_t *)pApp;
 
@@ -1177,8 +1152,6 @@ Cy_USB_EchoDeviceHandleCtrlSetup (void *pApp, cy_stc_usbd_app_msg_t *pMsg)
             if ((bRequest == CY_USB_SC_SET_FEATURE) &&
                 (bTarget == CY_USB_CTRL_REQ_RECIPENT_INTF) &&
                 (wValue == 0x00)) {
-
-                /* TODO: Send a queue Msg to set the link to U2 */
                 Cy_USBD_SendAckSetupDataStatusStage(pAppCtxt->pUsbdCtxt);
                 isReqHandled = true;
             }
@@ -1207,9 +1180,8 @@ Cy_USB_EchoDeviceHandleCtrlSetup (void *pApp, cy_stc_usbd_app_msg_t *pMsg)
                     case CY_USB_FEATURE_DEVICE_REMOTE_WAKE:
                         DBG_APP_INFO("ClrFeature:CY_USB_FEATURE_DEVICE_REMOTE_WAKE\r\n");
                         Cy_USBD_SendAckSetupDataStatusStage(pAppCtxt->pUsbdCtxt);
-            /* TBD NT Enablng LPM only for CV test */
                         DBG_APP_INFO("Enabling LPM\r\n");
-            Cy_USBD_LpmEnable(pAppCtxt->pUsbdCtxt);
+                        Cy_USBD_LpmEnable(pAppCtxt->pUsbdCtxt);
                         isReqHandled = true;
                         break;
 
@@ -1274,10 +1246,7 @@ Cy_USB_EchoDeviceHandleCtrlSetup (void *pApp, cy_stc_usbd_app_msg_t *pMsg)
                                               ((uint8_t *)Ep0TestBuffer) + wValue,
                                               wLength);
 
-                    /* Wait until receive DMA transfer has been completed.
-                     * TODO: Timeout to be added.
-                     */
-                    while (!Cy_USBD_IsEp0ReceiveDone(pAppCtxt->pUsbdCtxt)) {
+                    while (!Cy_USBD_IsEp0ReceiveDone(pAppCtxt->pUsbdCtxt) && loopCount--) {
                         Cy_SysLib_DelayUs(10);
                     }
                 }
@@ -1307,7 +1276,6 @@ Cy_USB_EchoDeviceHandleCtrlSetup (void *pApp, cy_stc_usbd_app_msg_t *pMsg)
                     if (wLength > *((uint16_t *)glOsCompatibilityId)) {
                         wLength = *((uint16_t *)glOsCompatibilityId);
                     }
-                   // check = glOsCompatibilityId;
                     DBG_APP_INFO("OSCompat\r\n");
                     retStatus = Cy_USB_USBD_SendEndp0Data(pAppCtxt->pUsbdCtxt,
                                                  (uint8_t*)glOsCompatibilityId, wLength);
@@ -1345,12 +1313,11 @@ Cy_USB_EchoDeviceHandleCtrlSetup (void *pApp, cy_stc_usbd_app_msg_t *pMsg)
 
 }   /* end of function() */
 
-
-/*
- * Function: Cy_USB_Endp0ReadComplete()
- * Description:  Handler for DMA transfer completion on endpoint 0 OUT Transfer.
- * Parameter: cy_stc_usb_app_ctxt_t
- * return: void
+/**
+ * \name Cy_USB_Endp0ReadComplete
+ * \brief This function handles DMA transfer completion on endpoint 0 OUT Transfer.
+ * \param pApp application layer context pointer
+ * \retval None
  */
 void
 Cy_USB_Endp0ReadComplete (void *pApp)
@@ -1363,26 +1330,21 @@ Cy_USB_Endp0ReadComplete (void *pApp)
     xMsg.type = CY_USB_ENDP0_READ_COMPLETE;
     xMsg.data[0] = 0x00; /* Out and endp 0 */
     xMsg.data[1] = 0;
-
-#if FREERTOS_ENABLE
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
     DBG_APP_TRACE("Sent CY_USB_ENDP0_READ_COMPLETE\r\n");
-#else
-
-    Cy_USB_EchoDeviceTaskHandler(pAppCtxt, &xMsg);
-#endif /* FREERTOS_ENABLE */
 
     (void)status;
     return;
 }   /* end of function */
 
-/*
- * Function: Cy_USB_EchoDeviceDmaReadCompletion()
- * Description:  Handler for DMA transfer completion on OUT endpoint 
- * Parameter: cy_stc_usb_app_ctxt_t
- * return: uint8_t
+/**
+ * \name Cy_USB_EchoDeviceDmaReadCompletion
+ * \brief This function handles DMA transfer completion on OUT endpoint
+ * \param pApp application layer context pointer
+ * \param endpAddr endpoint address
+ * \retval None
  */
 void 
 Cy_USB_EchoDeviceDmaReadCompletion (void *pApp, uint8_t endpAddr)
@@ -1397,24 +1359,23 @@ Cy_USB_EchoDeviceDmaReadCompletion (void *pApp, uint8_t endpAddr)
     xMsg.data[0] = endpAddr;
     xMsg.data[1] = 0;
 
-#if FREERTOS_ENABLE
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
     DBG_APP_TRACE("Sent CY_USB_ECHO_DEVICE_MSG_READ_COMPLETE\r\n");
-#else
-    Cy_USB_EchoDeviceTaskHandler(pAppCtxt, &xMsg);
-#endif /* FREERTOS_ENABLE */
+
+    Cy_USB_App_KeepLinkActive(pAppCtxt);
 
     (void)status;
     return;
 }   /* end of function */
 
-/*
- * Function: Cy_USB_EchoDeviceDmaWriteCompletion()
- * Description:  Handler for DMA transfer completion on OUT endpoint 
- * Parameter: cy_stc_usb_app_ctxt_t
- * return: uint8_t
+/**
+ * \name Cy_USB_EchoDeviceDmaWriteCompletion
+ * \brief This function handles DMA transfer completion on OUT endpoint 
+ * \param pApp application layer context pointer
+ * \param endpAddr endpoint address
+ * \retval None
  */
 void 
 Cy_USB_EchoDeviceDmaWriteCompletion (void *pApp, uint8_t endpAddr)
@@ -1428,16 +1389,13 @@ Cy_USB_EchoDeviceDmaWriteCompletion (void *pApp, uint8_t endpAddr)
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_WRITE_COMPLETE;
     xMsg.data[0] = endpAddr;
     xMsg.data[1] = 0;
-#if FREERTOS_ENABLE
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
                                &(xHigherPriorityTaskWoken));
     DBG_APP_TRACE("Sent CY_USB_ECHO_DEVICE_MSG_WRITE_COMPLETE\r\n");
-#else
 
-    Cy_USB_EchoDeviceTaskHandler(pAppCtxt, &xMsg);
-#endif /* FREERTOS_ENABLE */
+    Cy_USB_App_KeepLinkActive(pAppCtxt);
 
     (void)status;
     return;
-}   /* end of function */
+} /* end of function */

@@ -2,12 +2,12 @@
 * \file usb_app_common.c
 * \version 1.0
 *
-* Provides functions to configure USB endpoint and DMA resources for USB
-* 2.x connection.
+* \brief    Provides functions to configure USB endpoint and DMA resources for USB
+*           2.x connection.
 *
 *******************************************************************************
 * \copyright
-* (c) (2024), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2025), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -44,23 +44,14 @@ extern void InEpDma_ISR(uint8_t endpNumber);
 cy_israddress GetEPInDmaIsr(uint8_t epNum);
 cy_israddress GetEPOutDmaIsr(uint8_t epNum);
 
-/*******************************************************************************
-* Function name: Cy_USB_AppConfigureEndp
-****************************************************************************//**
-*
-* This Function is used by application to configure endpoints after set
-* configuration. This function should be used for all endpoints except endp0.
-*
-* \param pUsbdCtxt
-* USBD layer context pointer.
-*
-* \param pEndpDscr
-* pointer to endpoint descriptor.
-*
-* \return
-* None.
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppConfigureEndp
+ * \brief   This Function is used by application to configure endpoints after set
+ *          configuration. This function should be used for all endpoints except endp0.
+ * \param pUsbdCtxt USBD layer context pointer.
+ * \param pEndpDscr pointer to endpoint descriptor.
+ * \retval None
+ */
 void
 Cy_USB_AppConfigureEndp (cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, uint8_t *pEndpDscr)
 {
@@ -130,23 +121,14 @@ Cy_USB_AppConfigureEndp (cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, uint8_t *pEndpDscr)
 }   /* end of function */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppDestroyEndpDmaParamsHs
-****************************************************************************//**
-*
-* This Function de-couple endpoint and DMA channel for HS controller. It also
-* distroys DMA channel.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param pEndpDscr
-* pointer to endpoint descriptor.
-*
-* \return
-* None
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppDestroyEndpDmaParamsHs
+ * \details This Function de-couple endpoint and DMA channel for HS controller. It also
+ *          destroys DMA channel.
+ * \param pAppCtxt application layer context pointer.
+ * \param pEndpDscr pointer to endpoint descriptor.
+ * \retval None
+ */
 void
 Cy_USB_AppDestroyEndpDmaParamsHs (cy_stc_usb_app_ctxt_t *pUsbApp,
                                   uint8_t *pEndpDscr)
@@ -188,31 +170,19 @@ Cy_USB_AppDestroyEndpDmaParamsHs (cy_stc_usb_app_ctxt_t *pUsbApp,
         memset(pEndpDmaSet, 0, sizeof(cy_stc_app_endp_dma_set_t));
         pEndpDmaSet->channel = endpNum;
     }
-    pUsbApp->hbChannelCreated = false;
     DBG_APP_TRACE("Cy_USB_AppDestroyEndpDmaParamsHs << \r\n");
     return;
 }   /* end of function() */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppTerminateCpuDma
-****************************************************************************//**
-*
-* Function will disable associate central DMA channel.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNum
-* endpoint number.
-*
-* \param endpDir
-* endpoint direction
-*
-* \return
-* None
-*
-********************************************************************************/
+/**
+ * \name Cy_USB_AppTerminateCpuDma
+ * \brief Function will disable associate central DMA channel.
+ * \param pAppCtxt application layer context pointer.
+ * \param endpNum endpoint number.
+ * \param endpDir endpoint direction
+ * \retval None
+ */
 void
 Cy_USB_AppTerminateCpuDma (cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNum,
                            cy_en_usb_endp_dir_t endpDir)
@@ -254,25 +224,14 @@ Cy_USB_AppTerminateCpuDma (cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNum,
 }   /* end of function */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppTerminateDma
-****************************************************************************//**
-*
-* Function will disable associate DMA channel.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNum
-* endpoint number.
-*
-* \param endpDir
-* endpoint direction
-*
-* \return
-* None
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppTerminateDma
+ * \brief Function will disable associate DMA channel.
+ * \param pAppCtxt application layer context pointer.
+ * \param endpNum endpoint number.
+ * \param endpDir endpoint direction
+ * \retval None
+ */
 void
 Cy_USB_AppTerminateDma (cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNum,
                         cy_en_usb_endp_dir_t endpDir)
@@ -315,19 +274,12 @@ Cy_USB_AppTerminateDma (cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNum,
 }   /* end of function */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppFindValidInEndpNumber
-****************************************************************************//**
-*
-* Find valid IN endpoint number.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \return
-* 0x00 or endpoint number.
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppFindValidInEndpNumber
+ * \brief Find valid IN endpoint number.
+ * \param pAppCtxt application layer context pointer.
+ * \retval 0x00 or endpoint number.
+ */
 uint8_t
 Cy_USB_AppFindValidInEndpNumber (cy_stc_usb_app_ctxt_t *pUsbApp)
 {
@@ -347,19 +299,12 @@ Cy_USB_AppFindValidInEndpNumber (cy_stc_usb_app_ctxt_t *pUsbApp)
 }   /* end of function */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppFindValidOutEndpNumber
-****************************************************************************//**
-*
-* Find valid OUT endpoint number.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \return
-* 0x00 or endpoint number.
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppFindValidOutEndpNumber
+ * \brief Find valid OUT endpoint number.
+ * \param pAppCtxt application layer context pointer.
+ * \retval 0x00 or endpoint number.
+ */
 uint8_t
 Cy_USB_AppFindValidOutEndpNumber (cy_stc_usb_app_ctxt_t *pUsbApp)
 {
@@ -376,22 +321,14 @@ Cy_USB_AppFindValidOutEndpNumber (cy_stc_usb_app_ctxt_t *pUsbApp)
 }   /* end of function */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppIsOutEndpValidEnable
-****************************************************************************//**
-*
-* Valid bit is set or not for given OUT endpoint.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNum
-* endpoint number.
-*
-* \return
-* TRUE if valid bit is set. FALSE if valid bit is cleared.
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppIsOutEndpValidEnable
+ * \brief Valid bit is set or not for given OUT endpoint.
+ * \param pAppCtxt application layer context pointer.
+ * \param endpNum endpoint number.
+ * \retval  TRUE if valid bit is set.
+ *          FALSE if valid bit is cleared.
+ */
 bool
 Cy_USB_AppIsOutEndpValidEnable (cy_stc_usb_app_ctxt_t *pUsbApp, uint8_t endpNum)
 {
@@ -402,22 +339,14 @@ Cy_USB_AppIsOutEndpValidEnable (cy_stc_usb_app_ctxt_t *pUsbApp, uint8_t endpNum)
 }   /* end of function */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppIsInEndpValidEnable
-****************************************************************************//**
-*
-* Valid bit is set or not for given IN endpoint.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNum
-* endpoint number.
-*
-* \return
-* TRUE if valid bit is set. FALSE if valid bit is cleared.
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppIsInEndpValidEnable
+ * \brief Valid bit is set or not for given IN endpoint.
+ * \param pAppCtxt application layer context pointer.
+ * \param endpNum endpoint number.
+ * \retval  TRUE if valid bit is set.
+ *          FALSE if valid bit is cleared.
+ */
 bool
 Cy_USB_AppIsInEndpValidEnable (cy_stc_usb_app_ctxt_t *pUsbApp, uint8_t endpNum)
 {
@@ -428,25 +357,14 @@ Cy_USB_AppIsInEndpValidEnable (cy_stc_usb_app_ctxt_t *pUsbApp, uint8_t endpNum)
 }   /* end of function */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppGetMaxPktSize
-****************************************************************************//**
-*
-* Function finds max packet size of an endpoint.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNum
-* endpoint number.
-*
-* \param endpDir
-* endpoint direction
-*
-* \return
-* Max Packet size.
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppGetMaxPktSize
+ * \brief Function finds max packet size of an endpoint.
+ * \param pAppCtxt application layer context pointer.
+ * \param endpNum endpoint number.
+ * \param endpDir endpoint direction
+ * \retval Max Packet size.
+ */
 uint32_t
 Cy_USB_AppGetMaxPktSize (cy_stc_usb_app_ctxt_t *pUsbApp, uint8_t endpNum,
                          cy_en_usb_endp_dir_t dir)
@@ -461,26 +379,15 @@ Cy_USB_AppGetMaxPktSize (cy_stc_usb_app_ctxt_t *pUsbApp, uint8_t endpNum,
 }   /* end of function */
 
 
-/*******************************************************************************
-* Function name: Cy_USB_AppInitCpuDmaIntr
-****************************************************************************//**
-*
-* Function to register an ISR for a USB endpoint DMA channel and enable
-* the interrupt.
-*
-* \param endpNum
-* endpoint number.
-*
-* \param endpDir
-* endpoint direction
-*
-* \param userIsr
-* user provided ISR function pointer.
-*
-* \return
-* None
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppInitCpuDmaIntr
+ * \brief   Function to register an ISR for a USB endpoint DMA channel and enable
+ *          the interrupt.
+ * \param endpNum endpoint number.
+ * \param endpDir endpoint direction
+ * \param userIsr user provided ISR function pointer.
+ * \retval None
+ */
 void 
 Cy_USB_AppInitCpuDmaIntr (uint32_t endpNum, cy_en_usb_endp_dir_t endpDir,
                           cy_israddress userIsr)
@@ -492,8 +399,6 @@ Cy_USB_AppInitCpuDmaIntr (uint32_t endpNum, cy_en_usb_endp_dir_t endpDir,
     if ((endpNum == 0x00) && (endpDir == CY_USB_ENDP_DIR_OUT)) {
         /* To make "RcevEndp0Data" non blocking, register ISR */
 #if (!CY_CPU_CORTEX_M4)
-
-        /* For CM0 yet to enable interrupt */
         intrCfg.intrPriority = 3;
         intrCfg.intrSrc = NvicMux6_IRQn;
         /* DW0 channels 0 onwards are used for OUT endpoints. */
@@ -517,14 +422,16 @@ Cy_USB_AppInitCpuDmaIntr (uint32_t endpNum, cy_en_usb_endp_dir_t endpDir,
     }
 
     if ((endpNum > 0) && (endpNum < CY_USB_NUM_ENDP_CONFIGURED)) {
-        DBG_APP_TRACE("Registring ISR for endp:%d endpDir %d \r\n",endpNum,endpDir);
+        DBG_APP_TRACE("Registering ISR for endp:%d endpDir %d \r\n",endpNum,endpDir);
 #if (!CY_CPU_CORTEX_M4)
-        intrCfg.intrPriority = 3;
-        intrCfg.intrSrc = NvicMux7_IRQn;
         if (endpDir == CY_USB_ENDP_DIR_IN) {
+            intrCfg.intrPriority = 3;
+            intrCfg.intrSrc = NvicMux4_IRQn;
             /* DW1 channels 0 onwards are used for IN endpoints. */
             intrCfg.cm0pSrc = (cy_en_intr_t)(cpuss_interrupts_dw1_0_IRQn + endpNum);
         } else {
+            intrCfg.intrPriority = 3;
+            intrCfg.intrSrc = NvicMux1_IRQn;
             /* DW0 channels 0 onwards are used for OUT endpoints. */
             intrCfg.cm0pSrc = (cy_en_intr_t)(cpuss_interrupts_dw0_0_IRQn + endpNum);
         }
@@ -557,25 +464,14 @@ Cy_USB_AppInitCpuDmaIntr (uint32_t endpNum, cy_en_usb_endp_dir_t endpDir,
     DBG_APP_TRACE("Cy_USB_AppInitCpuDmaIntr << \r\n");
 }   /* end of function. */
 
-/*******************************************************************************
-* Function name: Cy_USB_AppClearCpuDmaInterrupt
-****************************************************************************//**
-*
-* Function to clear the pending DMA interrupt associated with an endpoint.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNum
-* endpoint number.
-*
-* \param endpDir
-* endpoint direction
-*
-* \return
-* None
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppClearCpuDmaInterrupt
+ * \brief Function to clear the pending DMA interrupt associated with an endpoint.
+ * \param pAppCtxt application layer context pointer.
+ * \param endpNum endpoint number.
+ * \param endpDir endpoint direction
+ * \retval None
+ */
 void 
 Cy_USB_AppClearCpuDmaInterrupt (cy_stc_usb_app_ctxt_t *pAppCtxt,
                                 uint32_t endpNum, cy_en_usb_endp_dir_t endpDir)
@@ -600,26 +496,15 @@ Cy_USB_AppClearCpuDmaInterrupt (cy_stc_usb_app_ctxt_t *pAppCtxt,
     }
 }   /* end of function. */
 
-/*******************************************************************************
-* Function name: Cy_USB_AppHandleSetCfgCommon
-****************************************************************************//**
-*
-* Function handles common portion of set configuration call back to application.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param pUsbdCtxt
-* USBD layer  context pointer.
-*
-* \param pMsg
-* pointer to message coming from lower layer.
-*
-* \return
-* CY_USB_APP_STATUS_SUCCESS in case of set Config handle without error.
-* CY_USB_APP_STATUS_FAILURE in all other case.
-*
-*******************************************************************************/
+/**
+ * \name Cy_USB_AppHandleSetCfgCommon
+ * \brief Function handles common portion of set configuration call back to application.
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer  context pointer.
+ * \param pMsg pointer to message coming from lower layer.
+ * \retval  CY_USB_APP_STATUS_SUCCESS in case of set Config handle without error.
+ *          CY_USB_APP_STATUS_FAILURE in all other case.
+ */
 cy_en_usb_app_ret_code_t
 Cy_USB_AppHandleSetCfgCommon (cy_stc_usb_app_ctxt_t *pAppCtxt,
                               cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
@@ -641,7 +526,6 @@ Cy_USB_AppHandleSetCfgCommon (cy_stc_usb_app_ctxt_t *pAppCtxt,
     pSetupReq = (cy_stc_usb_setup_req_t *)(&(pMsg->data[0]));
     /* Disable DMA if Set Config request on Config index 0 is received */
     if(pSetupReq->wValue == 0) {
-        /* TBD: Device should move to adress state so unconfigure everything. */
         DBG_APP_INFO("Set CFG 0\r\n");
         return CY_USB_APP_STATUS_FAILURE;
     }

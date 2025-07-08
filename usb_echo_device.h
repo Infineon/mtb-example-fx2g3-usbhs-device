@@ -6,7 +6,7 @@
 *
 *******************************************************************************
 * \copyright
-* (c) (2024), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2025), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -47,14 +47,16 @@ extern "C" {
 #define CY_USB_ECHO_DEVICE_CLEAR_FEATURE            (0x0D)
 #define CY_USB_ENDP0_READ_COMPLETE                  (0x0E)
 #define CY_USB_ENDP0_READ_TIMEOUT                   (0x0F)
-#define CY_USB_VBUS_DETECT_PRESENT                  (0x10)
-#define CY_USB_VBUS_DETECT_ABSENT                   (0x11)
 #define CY_USB_ECHO_DEVICE_MSG_CTRL_XFER_SETUP      (0x12)
+#define CY_USB_VBUS_CHANGE_INTR                     (0x1E)
+#define CY_USB_VBUS_CHANGE_DEBOUNCED                (0x1F)
 #define MS_VENDOR_CODE                              (0xF0)
 #define CY_USB_ECHO_DEVIE_MSG_QUEUE_SIZE            (16)
 #define CY_USB_ECHO_DEVIE_MSG_SIZE                  (sizeof (cy_stc_usbd_app_msg_t))
 #define CY_USB_MAX_DATA_BUFFER_SIZE                 (1024)
 #define CY_IFX_ECHO_LOPBACK_MAX_QUEUE_SIZE          (8)
+
+
 
 /* Used by application layer based on number of endp configured.*/
 #define CY_USB_NUM_ENDP_CONFIGURED                  (6)
@@ -114,21 +116,57 @@ struct cy_stc_usb_echo_dev_ctxt_
     uint8_t activeAltSetEndps[12];
 };
 
-
-#if FREERTOS_ENABLE
+/**
+ * \name Cy_USB_EchoDeviceTaskHandler
+ * \brief This function handles data transfer for source/sink echo device.
+ * \param pTaskParam Task param
+ * \param qMsg messgae queue pointer
+ * \retval None
+ */
 void Cy_USB_EchoDeviceTaskHandler(void *pTaskParam);
-#else
-void Cy_USB_EchoDeviceTaskHandler (void *pTaskParam, void *qMsg);
-#endif /* FREETROS_ENABLE */
+
+/**
+ * \name Cy_USB_EchoDeviceDmaReadCompletion
+ * \brief This function handles DMA transfer completion on OUT endpoint
+ * \param pApp application layer context pointer
+ * \param endpAddr endpoint address
+ * \retval None
+ */
 void Cy_USB_EchoDeviceDmaReadCompletion(void *pApp, uint8_t endpAddr);
 
+/**
+ * \name Cy_USB_EchoDeviceDmaWriteCompletion
+ * \brief This function handles DMA transfer completion on OUT endpoint 
+ * \param pApp application layer context pointer
+ * \param endpAddr endpoint address
+ * \retval None
+ */
 void Cy_USB_EchoDeviceDmaWriteCompletion(void *pApp, uint8_t endpAddr);
 
-void Cy_DevSpeedBasedfxQueueUpdate(void *pApp,
-                                   cy_en_usb_speed_t devSpeed);
+/**
+ * \name Cy_DevSpeedBasedfxQueueUpdate
+ * \brief Based on speed, need to update different pointer including data pointer.
+ * \param pApp application layer context pointer
+ * \param devSpeed USB device speed
+ * \retval None
+ */
+void Cy_DevSpeedBasedfxQueueUpdate(void *pApp, cy_en_usb_speed_t devSpeed);
 
+/**
+ * \name Cy_USB_Endp0ReadComplete
+ * \brief This function handles DMA transfer completion on endpoint 0 OUT Transfer.
+ * \param pApp application layer context pointer
+ * \retval None
+ */
 void Cy_USB_Endp0ReadComplete(void *pApp);
 
+/**
+ * \name Cy_USB_EchoDeviceHandleCtrlSetup
+ * \brief This function handles control command given to application.
+ * \param pApp application layer context pointer
+ * \param pMsg app messgae queue pointer
+ * \retval None
+ */
 void Cy_USB_EchoDeviceHandleCtrlSetup(void *pApp, cy_stc_usbd_app_msg_t *pMsg);
 
 #if defined(__cplusplus)
