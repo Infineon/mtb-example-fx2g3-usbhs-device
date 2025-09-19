@@ -327,7 +327,7 @@ void Cy_USB_USBHSInit(void)
        USBHS Active & DeepSleep - NVIC Mux #5
        DMA Controller 1 - NVIC Mux #6
        DataWire 0 - NVIC Mux #1
-	   DataWire 1 - NVIC Mux #4
+       DataWire 1 - NVIC Mux #4
     */
     /* Register edge detect interrupt for Vbus detect GPIO. */
 #if CY_CPU_CORTEX_M4
@@ -533,7 +533,7 @@ int main(void)
     /* Initialize the device and board peripherals */
     cybsp_init();
 
-	/* Disable ECO to avoid overwriting crystal settings */
+    /* Disable ECO to avoid overwriting crystal settings */
     Cy_SysClk_EcoDisable();
 
     /* Initialize the PDL and register ISR for USB block. */
@@ -612,8 +612,8 @@ int main(void)
     vTaskStartScheduler();
     while (1)
     {
-    	Cy_SysLib_Delay(10000);
-    	DBG_APP_INFO("Task Idle \r\n");
+        Cy_SysLib_Delay(10000);
+        DBG_APP_INFO("Task Idle \r\n");
     }
 
     return 0;

@@ -800,6 +800,9 @@ Cy_USB_EchoDeviceTaskHandler (void *pTaskParam)
     /* If VBus is present, enable the USB connection. */
     pAppCtxt->vbusPresent =
     (Cy_GPIO_Read(VBUS_DETECT_GPIO_PORT, VBUS_DETECT_GPIO_PIN) == VBUS_DETECT_STATE);
+#if USBFS_LOGS_ENABLE
+    vTaskDelay(500);
+#endif /* USBFS_LOGS_ENABLE */
 
     if (pAppCtxt->vbusPresent) {
         Cy_USB_ConnectionEnable(pAppCtxt);
@@ -844,13 +847,13 @@ Cy_USB_EchoDeviceTaskHandler (void *pTaskParam)
             endpNum = (endpAddr & CY_USBD_ENDP_NUM_MASK);
 
             switch (queueMsg.type) {
-    		 case CY_USB_VBUS_CHANGE_INTR:
+             case CY_USB_VBUS_CHANGE_INTR:
                   /* Start the debounce timer. */
                   xTimerStart(pAppCtxt->vbusDebounceTimer, 0);
                   break;
 
               case CY_USB_VBUS_CHANGE_DEBOUNCED:
-            	  DBG_APP_INFO("CY_USB_VBUS_CHANGE_DEBOUNCED \n\r");
+                  DBG_APP_INFO("CY_USB_VBUS_CHANGE_DEBOUNCED \n\r");
                   /* Check whether VBus state has changed. */
                   pAppCtxt->vbusPresent = (Cy_GPIO_Read(VBUS_DETECT_GPIO_PORT, VBUS_DETECT_GPIO_PIN) == VBUS_DETECT_STATE);
 
