@@ -6,7 +6,7 @@
 *
 *******************************************************************************
 * \copyright
-* (c) (2025), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2026), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -75,10 +75,14 @@ struct cy_stc_usb_app_ctxt_
     cy_en_usb_speed_t devSpeed;
     cy_en_usb_enum_method_t enumMethod;
 
-    cy_stc_app_endp_dma_set_t endpInDma[CY_USB_NUM_ENDP_CONFIGURED];
-    cy_stc_app_endp_dma_set_t endpOutDma[CY_USB_NUM_ENDP_CONFIGURED];
-    uint8_t intfAltSetEndp[4][4];    /* Max 4INTF AND EACH INTERFACE 4 alt setting */ 
-    /* Next three are related to central DMA */
+    cy_stc_app_endp_dma_set_t endpInDma[CY_USB_NUM_ENDP_CONFIGURED+1];
+    cy_stc_app_endp_dma_set_t endpOutDma[CY_USB_NUM_ENDP_CONFIGURED+1];
+    
+    cy_stc_hbdma_channel_t *pInEpDma[CY_USB_NUM_ENDP_CONFIGURED+1];       
+    cy_stc_hbdma_channel_t *pOutEpDma[CY_USB_NUM_ENDP_CONFIGURED+1];       
+    
+    uint8_t intfAltSetEndp[4][4];    				/* Max 4INTF AND EACH INTERFACE 4 alt setting */ 
+    											    /* Next three are related to central DMA */
     DMAC_Type *pCpuDmacBase;
     DW_Type *pCpuDw0Base;
     DW_Type *pCpuDw1Base;
@@ -95,24 +99,16 @@ struct cy_stc_usb_app_ctxt_
     bool dataXferIntrEnabled;
     /* VBus detect status */
     bool vbusPresent;
-    bool usbConnected;                                              /** Whether USB connection is enabled. */
+    bool usbConnected;                                  /** Whether USB connection is enabled. */
     /* USB connection status */
     bool usbConnectDone;
 
-    bool vbusChangeIntr;                        /** VBus change interrupt received flag. */
-    TimerHandle_t vbusDebounceTimer;            /** VBus change debounce timer handle. */
+    bool vbusChangeIntr;                        		/** VBus change interrupt received flag. */
+    TimerHandle_t vbusDebounceTimer;            		/** VBus change debounce timer handle. */
 
     bool          isLpmEnabled;                         /* Whether LPM transitions are enabled. */
     uint32_t      lpmEnableTime;                        /* Timestamp at which LPM should be re-enabled. */
 };
-
-/**
- * \name Cy_USB_EchoDeviceInit
- * \brief function to initialize EchoDevice for source/sink.
- * \param pAppCtxt application layer context pointer
- * \retval None
- */
-void  *Cy_USB_EchoDeviceInit(cy_stc_usb_app_ctxt_t *pAppCtxt);
 
 /**
  * \name Cy_USB_AppSetupEndpDmaParamsHs
@@ -148,55 +144,6 @@ void Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pU
  */
 void Cy_USB_AppRegisterCallback(cy_stc_usb_app_ctxt_t *pAppCtxt);
 
-/**
- * \name Cy_USB_AppInitEndpCpuDmaDscrConfig
- * \brief This function initializes DMA descriptor for endpoint 0 IN transfer.
- * \param pEndpCpuDmaDscrConfig Endpoint DMa descriptor configuration pointer
- * \param pSrcAddr data source address
- * \param pDstAddr data destination address
- * \param endpSize Endpoint size
- * \param endpDirection Endpoint direction
- * \retval None
- */
-void Cy_USB_AppInitEndpCpuDmaDscrConfig(cy_stc_dma_descriptor_config_t *pEndpCpuDmaDscrConfig, 
-    uint32_t *pSrcAddr, uint32_t *pDstAddr, uint32_t endpSize, 
-    cy_en_usb_endp_dir_t endpDirection);
-
-/**
- * \name Cy_USB_AppQueueRead
- * \brief Function to queue read operation on an OUT endpoint.
- * \param pAppCtxt application layer context pointer.
- * \param endpNum endpoint number.
- * \param endpDir endpoint direction
- * \param pBuffer pointer to buffer where data will be stored.
- * \param dataSize expected data size.
- * \retval None
- */
-void Cy_USB_AppQueueRead(cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNumber, uint8_t *pBuffer, uint16_t dataSize);
-
-/**
- * \name Cy_USB_AppReadShortPacket
- * \brief   Function to modify an ongoing DMA read operation to take care of a short
- *          packet.
- * \param pAppCtxt application layer context pointer.
- * \param endpNum endpoint number.
- * \param pktSize Size of the short packet to be read out. Can be zero in case of ZLP.
- * \retval 0x00 or Data size.
- */
-uint16_t Cy_USB_AppReadShortPacket(cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNumber, uint16_t pktSize);
-
-/**
- * \name Cy_USB_AppQueueWrite
- * \brief Function to queue write operation on an IN endpoint
- * \param pAppCtxt
- * \brief application layer context pointer.
- * \param endpNum endpoint number.
- * \param endpDir endpoint direction
- * \param pBuffer pointer to buffer where data is available.
- * \param dataSize size of data available in buffer.
- * \retval None
- */
-void Cy_USB_AppQueueWrite(cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNumber, uint8_t *pBuffer, uint16_t dataSize);
 
 /**
  * \name Cy_USB_RecvEndp0TimerCallback
@@ -329,26 +276,6 @@ void Cy_USB_AppZlpCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, cy_
 void Cy_USB_AppSlpCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, cy_stc_usb_cal_msg_t *pMsg);
 
 /**
- * \name Cy_USB_AppSetFeatureCallback
- * \brief Callback function will be invoked by USBD when Set Feature comes.
- * \param pAppCtxt application layer context pointer.
- * \param pUsbdCtxt USBD layer context pointer
- * \param pMsg USB Message
- * \retval None
- */
-void Cy_USB_AppSetFeatureCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, cy_stc_usb_cal_msg_t *pMsg);
-
-/**
- * \name Cy_USB_AppClearFeatureCallback
- * \brief Callback function will be invoked by USBD when clear Feature comes.
- * \param pAppCtxt application layer context pointer.
- * \param pUsbdCtxt USBD layer context pointer
- * \param pMsg USB Message
- * \retval None
- */
-void Cy_USB_AppClearFeatureCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, cy_stc_usb_cal_msg_t *pMsg);
-
-/**
  * \name Cy_USB_ConnectionEnable
  * \brief Function used to enable USB 2.x connection.
  * \param pAppCtxt Application context structure.
@@ -380,6 +307,20 @@ void Cy_USB_AppLightDisable(cy_stc_usb_app_ctxt_t *pAppCtxt);
  */
 void
 Cy_USB_VbusDebounceTimerCallback (TimerHandle_t xTimer);
+
+/**
+ * \name HbDma_Cb
+ * \brief   HBDMA callback function to manage data transfers on the USB Audio Class endpoint
+ * \param handle HBDMA channel handle
+ * \param cy_en_hbdma_cb_type_t HBDMA channel type
+ * \param pbufStat fHBDMA buffer status
+ * \param userCtx user context
+ * \retval None
+ */
+void HbDma_Cb (cy_stc_hbdma_channel_t *handle,
+                          cy_en_hbdma_cb_type_t type,
+                          cy_stc_hbdma_buff_status_t *pbufStat,
+                          void *userCtx);
 
 #if defined(__cplusplus)
 }

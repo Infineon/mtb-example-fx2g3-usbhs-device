@@ -6,7 +6,7 @@
 *
 *******************************************************************************
 * \copyright
-* (c) (2025), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2026), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -332,8 +332,8 @@ void Cy_USB_GenerateConfigDescriptor (void)
 
     /* Code to configure the USBHS Configuration descriptor. */
     idx      = 0;
-    hsDscLen = 9 + 9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED - 1) + 9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED - 1) +
-               9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED - 1);
+    hsDscLen = 9 + 9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED) + 9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED) +
+               9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED );
 
     /* Configure the 9 byte config descriptor. */
     CyFxUSBHSConfigDscr[idx++] = 0x09;
@@ -351,13 +351,13 @@ void Cy_USB_GenerateConfigDescriptor (void)
     CyFxUSBHSConfigDscr[idx++] = 0x04;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
-    CyFxUSBHSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED - 1);
+    CyFxUSBHSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED );
     CyFxUSBHSConfigDscr[idx++] = 0xFF;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
 
-    for (ep = 1; ep < CY_USB_NUM_ENDP_CONFIGURED; ep++) {
+    for (ep = 1; ep <= CY_USB_NUM_ENDP_CONFIGURED; ep++) {
         /* Bulk OUT endpoint descriptor. */
         CyFxUSBHSConfigDscr[idx++] = 0x07;
         CyFxUSBHSConfigDscr[idx++] = 0x05;
@@ -382,13 +382,13 @@ void Cy_USB_GenerateConfigDescriptor (void)
     CyFxUSBHSConfigDscr[idx++] = 0x04;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
     CyFxUSBHSConfigDscr[idx++] = 0x01;
-    CyFxUSBHSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED - 1);
+    CyFxUSBHSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED);
     CyFxUSBHSConfigDscr[idx++] = 0xFF;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
 
-    for (ep = 1; ep < CY_USB_NUM_ENDP_CONFIGURED; ep++) {
+    for (ep = 1; ep <= CY_USB_NUM_ENDP_CONFIGURED; ep++) {
         /* Interrupt OUT endpoint descriptor. */
         CyFxUSBHSConfigDscr[idx++] = 0x07;
         CyFxUSBHSConfigDscr[idx++] = 0x05;
@@ -413,13 +413,13 @@ void Cy_USB_GenerateConfigDescriptor (void)
     CyFxUSBHSConfigDscr[idx++] = 0x04;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
     CyFxUSBHSConfigDscr[idx++] = 0x02;
-    CyFxUSBHSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED - 1);
+    CyFxUSBHSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED);
     CyFxUSBHSConfigDscr[idx++] = 0xFF;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
     CyFxUSBHSConfigDscr[idx++] = 0x00;
 
-    for (ep = 1; ep < CY_USB_NUM_ENDP_CONFIGURED; ep++) {
+    for (ep = 1; ep <= CY_USB_NUM_ENDP_CONFIGURED; ep++) {
         /* Interrupt OUT endpoint descriptor. */
         CyFxUSBHSConfigDscr[idx++] = 0x07;
         CyFxUSBHSConfigDscr[idx++] = 0x05;
@@ -441,7 +441,7 @@ void Cy_USB_GenerateConfigDescriptor (void)
 
      /* Code to configure the USBHS Configuration descriptor. */
     idx      = 0;
-    fsDscLen = 9 + 9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED - 1) + 9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED - 1) + 9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED - 1) ;
+    fsDscLen = 9 + 9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED) + 9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED) + 9 + 14 * (CY_USB_NUM_ENDP_CONFIGURED) ;
 
     /* Configure the 9 byte config descriptor. */
     CyFxUSBFSConfigDscr[idx++] = 0x09;
@@ -459,13 +459,13 @@ void Cy_USB_GenerateConfigDescriptor (void)
     CyFxUSBFSConfigDscr[idx++] = 0x04;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
-    CyFxUSBFSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED - 1);
+    CyFxUSBFSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED);
     CyFxUSBFSConfigDscr[idx++] = 0xFF;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
 
-    for (ep = 1; ep < CY_USB_NUM_ENDP_CONFIGURED; ep++ ) {
+    for (ep = 1; ep <= CY_USB_NUM_ENDP_CONFIGURED; ep++ ) {
         /* Bulk OUT endpoint descriptor. */
         CyFxUSBFSConfigDscr[idx++] = 0x07;
         CyFxUSBFSConfigDscr[idx++] = 0x05;
@@ -491,13 +491,13 @@ void Cy_USB_GenerateConfigDescriptor (void)
     CyFxUSBFSConfigDscr[idx++] = 0x04;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
     CyFxUSBFSConfigDscr[idx++] = 0x01;
-    CyFxUSBFSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED - 1);
+    CyFxUSBFSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED);
     CyFxUSBFSConfigDscr[idx++] = 0xFF;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
 
-    for (ep = 1; ep < CY_USB_NUM_ENDP_CONFIGURED; ep++) {
+    for (ep = 1; ep <= CY_USB_NUM_ENDP_CONFIGURED; ep++) {
         /* Interrupt OUT endpoint descriptor. */
         CyFxUSBFSConfigDscr[idx++] = 0x07;
         CyFxUSBFSConfigDscr[idx++] = 0x05;
@@ -522,13 +522,13 @@ void Cy_USB_GenerateConfigDescriptor (void)
     CyFxUSBFSConfigDscr[idx++] = 0x04;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
     CyFxUSBFSConfigDscr[idx++] = 0x02;
-    CyFxUSBFSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED - 1);
+    CyFxUSBFSConfigDscr[idx++] = 2 * (CY_USB_NUM_ENDP_CONFIGURED);
     CyFxUSBFSConfigDscr[idx++] = 0xFF;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
     CyFxUSBFSConfigDscr[idx++] = 0x00;
 
-    for (ep = 1; ep < CY_USB_NUM_ENDP_CONFIGURED; ep++) {
+    for (ep = 1; ep <= CY_USB_NUM_ENDP_CONFIGURED; ep++) {
         /* Interrupt OUT endpoint descriptor. */
         CyFxUSBFSConfigDscr[idx++] = 0x07;
         CyFxUSBFSConfigDscr[idx++] = 0x05;

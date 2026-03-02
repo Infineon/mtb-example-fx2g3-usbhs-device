@@ -9,7 +9,7 @@
 *
 *******************************************************************************
 * \copyright
-* (c) (2025), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2026), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -41,7 +41,6 @@
 #include "cy_usbd_version.h"
 #include "cy_hbdma_version.h"
 #include "app_version.h"
-#include "usb_app_common.h"
 
 /* Select SCB interface used for UART based logging. */
 #define LOGGING_SCB             (SCB4)
@@ -98,8 +97,6 @@ extern void xPortPendSVHandler(void);
 extern void xPortSysTickHandler(void);
 extern void vPortSVCHandler(void);
 
-
-
 /**
  * \name SysTickIntrWrapper
  * \brief Increment tick and pass control to sys tick handler
@@ -124,7 +121,11 @@ void vPortSetupTimerInterrupt(void)
 
     /* Start the SysTick timer with a period of 1 ms. */
     Cy_SysTick_SetClockSource(CY_SYSTICK_CLOCK_SOURCE_CLK_CPU);
+#if CY_CPU_CORTEX_M4
     Cy_SysTick_SetReload(Cy_SysClk_ClkFastGetFrequency() / 1000U);
+#else
+    Cy_SysTick_SetReload(Cy_SysClk_ClkSlowGetFrequency() / 1000U);
+#endif /* CY_CPU_CORTEX_M4 */
     Cy_SysTick_Clear();
     Cy_SysTick_Enable();
 }
@@ -285,7 +286,7 @@ static void Cy_USB_RemoteWakeGpio_ISR(void)
     Cy_GPIO_ClearInterrupt(P13_0_PORT, P13_0_PIN);
 
     if (gpio_state != 0) {
-    DBG_APP_INFO("Remote wake request detected\r\n");
+    DBG_APP_INFO("USB: Remote wake request detected\r\n");
     /* Duration of signal will be taken care by HS_CAL */
     Cy_USBD_SignalRemoteWakeup(&usbdCtxt, true);
     }
@@ -425,6 +426,9 @@ bool Cy_Echo_HbDmaInit(void)
     {
         return false;
     }
+    
+       /* Register the USB stack context with the HBW DMA manager. */
+    Cy_HBDma_Mgr_RegisterUsbContext(&HBW_MgrCtxt, &usbdCtxt);
 
     return true;
 }
@@ -437,18 +441,8 @@ bool Cy_Echo_HbDmaInit(void)
 void
 OutEpDma_ISR (uint8_t endpNum)
 {
-    /*
-     * For this application single BULK_OUT endpoint is used so hardcoded value
-     * used here.
-     */
-    DBG_APP_TRACE("...ISR...OutEpDma...endpNum:0x%x\r\n",endpNum);
-    if (endpNum == 0x00) {
-        Cy_USB_AppClearCpuDmaInterrupt(&appCtxt, endpNum, CY_USB_ENDP_DIR_OUT);
-        Cy_USB_Endp0ReadComplete((void *)&appCtxt);
-    } else {
-        Cy_USB_AppClearCpuDmaInterrupt(&appCtxt, endpNum, CY_USB_ENDP_DIR_OUT);
-        Cy_USB_EchoDeviceDmaReadCompletion(&appCtxt, endpNum);
-    }
+    DBG_APP_TRACE("USB: OUT Ep 0x%x DMA ISR\r\n",endpNum);
+    Cy_HBDma_Mgr_HandleDW0Interrupt(appCtxt.pHbDmaMgrCtxt);
     portYIELD_FROM_ISR(true);
 }
 
@@ -459,10 +453,8 @@ OutEpDma_ISR (uint8_t endpNum)
  */
 void InEpDma_ISR (uint8_t endpNum)
 {
-    DBG_APP_TRACE("...ISR...InEpDma...endpNum:0x%x\r\n",endpNum);
-    Cy_USB_AppClearCpuDmaInterrupt(&appCtxt, endpNum, CY_USB_ENDP_DIR_IN);
-    /* endpoint direction and endp number together makes address */
-    Cy_USB_EchoDeviceDmaWriteCompletion(&appCtxt,0x80 | endpNum);
+    DBG_APP_TRACE("USB: IN Ep 0x%x DMA ISR\r\n",endpNum);
+    Cy_HBDma_Mgr_HandleDW1Interrupt(appCtxt.pHbDmaMgrCtxt);
     portYIELD_FROM_ISR(true);
 }
 
@@ -474,15 +466,13 @@ void InEpDma_ISR (uint8_t endpNum)
  */
 bool Cy_USB_ConnectionEnable (cy_stc_usb_app_ctxt_t *pAppCtxt)
 {
-    DBG_APP_INFO("USB ConnectionEnable >>\r\n");
-
-    DBG_APP_INFO("HS\r\n");
+    DBG_APP_INFO("USB: Connection Enable\r\n");
+    
     Cy_USBD_ConnectDevice(appCtxt.pUsbdCtxt, CY_USBD_USB_DEV_HS);
     pAppCtxt->usbConnected = true;
 
     Cy_SysLib_DelayUs(10);
     appCtxt.usbConnectDone = true;
-    DBG_APP_INFO("USB ConnectionEnable <<\r\n");
 
     return true;
 }
@@ -581,8 +571,6 @@ int main(void)
     /* Initialize the USBD layer */
     Cy_USB_USBD_Init(&appCtxt, &usbdCtxt, pCpuDmacBase, &hsCalCtxt,NULL, &HBW_MgrCtxt);
     DBG_APP_INFO("USBD_Init done\r\n");
-
-    Cy_USBD_SetDmaClkFreq(&usbdCtxt, CY_HBDMA_CLK_240_MHZ);
 
     /* Enable stall cycles between back-to-back AHB accesses to high bandwidth RAM. */
     MAIN_REG->CTRL = (MAIN_REG->CTRL & 0xF00FFFFFUL) | 0x09900000UL;

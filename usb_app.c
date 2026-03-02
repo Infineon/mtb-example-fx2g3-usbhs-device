@@ -6,7 +6,7 @@
 *
 *********************************************************************************
 * \copyright
-* (c) (2025), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2026), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -36,7 +36,6 @@
 #include "usb_echo_device.h"
 #include "usb_app.h"
 #include "cy_debug.h"
-#include "usb_app_common.h"
 #include "cy_usbhs_dw_wrapper.h"
 
 extern void OutEpDma_ISR(uint8_t endpNumber);
@@ -46,8 +45,323 @@ cy_israddress GetEPInDmaIsr(uint8_t epNum);
 cy_israddress GetEPOutDmaIsr(uint8_t epNum);
 
 uint32_t Ep0TestBuffer[1024U] __attribute__ ((aligned (32)));
-volatile uint16_t pktType = 0;
-volatile uint16_t pktLength = 1024;
+
+/**
+ * \name Cy_USB_AppInitCpuDmaIntr
+ * \brief   Function to register an ISR for a USB endpoint DMA channel and enable
+ *          the interrupt.
+ * \param endpNum endpoint number.
+ * \param endpDir endpoint direction
+ * \param userIsr user provided ISR function pointer.
+ * \retval None
+ */
+void 
+Cy_USB_AppInitCpuDmaIntr (uint32_t endpNum, cy_en_usb_endp_dir_t endpDir,
+                          cy_israddress userIsr)
+{
+    cy_stc_sysint_t intrCfg;
+    
+    DBG_APP_TRACE("USB: Init DMA Interrupt \r\n");
+
+    if ((endpNum == 0x00) && (endpDir == CY_USB_ENDP_DIR_OUT)) {
+        /* To make "RcevEndp0Data" non blocking, register ISR */
+#if (!CY_CPU_CORTEX_M4)
+        intrCfg.intrPriority = 3;
+        intrCfg.intrSrc = NvicMux6_IRQn;
+        /* DW0 channels 0 onwards are used for OUT endpoints. */
+        intrCfg.cm0pSrc = (cy_en_intr_t)(cpuss_interrupts_dmac_1_IRQn);
+
+#else
+        /* Only for OUT transfer interrupt registration required. */
+        intrCfg.intrPriority = 5;
+        intrCfg.intrSrc = (IRQn_Type)(cpuss_interrupts_dmac_1_IRQn);
+#endif /* !CY_CPU_CORTEX_M4 */
+
+       if (userIsr != NULL)  {
+            /* If an ISR is provided, register it and enable the interrupt. */
+            Cy_SysInt_Init(&intrCfg, userIsr);
+            NVIC_EnableIRQ(intrCfg.intrSrc);
+        } else {
+            /* ISR is NULL. Disable the interrupt. */
+            NVIC_DisableIRQ(intrCfg.intrSrc);
+        }
+
+    }
+
+    if ((endpNum > 0) && (endpNum <= CY_USB_NUM_ENDP_CONFIGURED)) {
+        DBG_APP_TRACE("USB: Registering ISR for endp:%d endpDir %d \r\n",endpNum,endpDir);
+#if (!CY_CPU_CORTEX_M4)
+        if (endpDir == CY_USB_ENDP_DIR_IN) {
+            intrCfg.intrPriority = 3;
+            intrCfg.intrSrc = NvicMux4_IRQn;
+            /* DW1 channels 0 onwards are used for IN endpoints. */
+            intrCfg.cm0pSrc = (cy_en_intr_t)(cpuss_interrupts_dw1_0_IRQn + endpNum);
+        } else {
+            intrCfg.intrPriority = 3;
+            intrCfg.intrSrc = NvicMux1_IRQn;
+            /* DW0 channels 0 onwards are used for OUT endpoints. */
+            intrCfg.cm0pSrc = (cy_en_intr_t)(cpuss_interrupts_dw0_0_IRQn + endpNum);
+        }
+#else
+        intrCfg.intrPriority = 5;
+        if (endpDir == CY_USB_ENDP_DIR_IN) {
+            DBG_APP_TRACE("USB: DIR-IN \r\n");
+            /* DW1 channels 0 onwards are used for IN endpoints. */
+            intrCfg.intrSrc =
+                          (IRQn_Type)(cpuss_interrupts_dw1_0_IRQn + endpNum);
+        } else {
+            /* DW0 channels 0 onwards are used for OUT endpoints. */
+            DBG_APP_TRACE("USB: DIR-OUT \r\n");
+            intrCfg.intrSrc =
+                          (IRQn_Type)(cpuss_interrupts_dw0_0_IRQn + endpNum);
+        }
+#endif /* (!CY_CPU_CORTEX_M4) */
+
+        if (userIsr != NULL)  {
+            /* If an ISR is provided, register it and enable the interrupt. */
+            DBG_APP_TRACE("USB: Registering ISR \r\n");
+            Cy_SysInt_Init(&intrCfg, userIsr);
+            NVIC_EnableIRQ(intrCfg.intrSrc);
+        } else {
+            /* ISR is NULL. Disable the interrupt. */
+            DBG_APP_TRACE("USB: Disabling ISR\r\n");
+            NVIC_DisableIRQ(intrCfg.intrSrc);
+        }
+    }
+
+}   /* end of function. */
+
+/**
+ * \name Cy_USB_AppConfigureEndp
+ * \brief   This Function is used by application to configure endpoints after set
+ *          configuration. This function should be used for all endpoints except endp0.
+ * \param pUsbdCtxt USBD layer context pointer.
+ * \param pEndpDscr pointer to endpoint descriptor.
+ * \retval None
+ */
+static void
+Cy_USB_AppConfigureEndp (cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, uint8_t *pEndpDscr)
+{
+    cy_stc_usb_endp_config_t endpConfig;
+    cy_en_usb_endp_dir_t endpDirection;
+    bool valid;
+    uint32_t endpType;
+    uint32_t endpNum, dir;
+    uint16_t maxPktSize;
+    uint32_t isoPkts = 0x00;
+    uint8_t burstSize = 0x00;
+    uint8_t maxStream = 0x00;
+    uint8_t interval = 0x00;
+
+    /* If it is not endpoint descriptor then return */
+    if (!Cy_USBD_EndpDscrValid(pEndpDscr)) {
+        DBG_APP_ERR("USB: EndpDscrNotValid \r\n");
+        return;
+    }
+    
+    Cy_USBD_GetEndpNumMaxPktDir(pEndpDscr, &endpNum, &maxPktSize, &dir);
+    
+    if (dir) {
+        DBG_APP_TRACE("USB: DIR-IN endpNum:%d \n", endpNum);
+        endpDirection = CY_USB_ENDP_DIR_IN;
+    } else {
+        DBG_APP_TRACE("USB: DIR-OUT endpNum:%d \n", endpNum);
+        endpDirection = CY_USB_ENDP_DIR_OUT;
+    }
+    
+    Cy_USBD_GetEndpType(pEndpDscr, &endpType);
+
+    if ((CY_USB_ENDP_TYPE_ISO == endpType) ||
+        (CY_USB_ENDP_TYPE_INTR == endpType)) {
+        /*
+         * The ISOINPKS setting in the USBHS register is the actual
+         * packets per microframe value.
+         */
+        isoPkts = 
+        ((*((uint8_t *)(pEndpDscr + CY_USB_ENDP_DSCR_OFFSET_MAX_PKT + 1)) & CY_USB_ENDP_ADDL_XN_MASK)
+        >> CY_USB_ENDP_ADDL_XN_POS) + 1;
+
+    }
+
+    valid = 0x01;
+    Cy_USBD_GetEndpInterval(pEndpDscr, &interval);
+
+    /* Prepare endpointConfig parameter. */
+    endpConfig.endpType = (cy_en_usb_endp_type_t)endpType;
+    endpConfig.endpDirection = endpDirection;
+    endpConfig.valid = valid;
+    endpConfig.endpNumber = endpNum;
+    endpConfig.maxPktSize = (uint32_t)maxPktSize;
+    endpConfig.isoPkts = isoPkts;
+    endpConfig.burstSize = burstSize;
+    endpConfig.streamID = (maxStream & 0x1F);
+    endpConfig.interval = interval;
+    
+     if (CY_USB_ENDP_TYPE_ISO == endpType)
+     {
+         endpConfig.allowNakTillDmaRdy = false;
+     }else {
+        /*
+         * allowNakTillDmaRdy = true means device will send NAK
+         * till DMA setup is ready. This field is applicable to only
+         * ingress direction ie OUT transfer/OUT endpoint.
+         * For Egress ie IN transfer, this field is ignored.
+         */
+        endpConfig.allowNakTillDmaRdy = true;
+
+    }
+
+    Cy_USB_USBD_EndpConfig(pUsbdCtxt, endpConfig);
+    Cy_USBD_ResetEndp(pUsbdCtxt, endpNum, endpDirection, false);
+    Cy_SysLib_Delay(1);
+
+    return;
+}   /* end of function */
+
+/**
+ * \name Cy_USB_AppDestroyEndpDmaParamsHs
+ * \details This Function de-couple endpoint and DMA channel for HS controller. It also
+ *          destroys DMA channel.
+ * \param pAppCtxt application layer context pointer.
+ * \param pEndpDscr pointer to endpoint descriptor.
+ * \retval None
+ */
+static void
+Cy_USB_AppDestroyEndpDmaParamsHs (cy_stc_usb_app_ctxt_t *pUsbApp,
+                                  uint8_t *pEndpDscr)
+{
+    uint32_t endpNum, endpDir;
+    uint16_t maxPktSize;
+
+    DBG_APP_TRACE("USB: Destroy DMA Params \r\n");
+    Cy_USBD_GetEndpNumMaxPktDir(pEndpDscr, &endpNum, &maxPktSize, &endpDir);
+ 
+
+    if ((endpNum > 0 &&  endpNum <= CY_USB_NUM_ENDP_CONFIGURED) && (endpDir != 0))
+    {
+        /* Stop and destroy the high bandwidth DMA channel if present. To be done before AppInit is called. */
+        if (pUsbApp->pInEpDma[endpNum] != NULL)
+        {
+            DBG_APP_TRACE("Destroying EP IN HBDMA channel \r\n");
+            Cy_HBDma_Channel_Reset(pUsbApp->pInEpDma[endpNum]);
+            Cy_HBDma_Channel_Disable(pUsbApp->pInEpDma[endpNum]);
+            Cy_HBDma_Channel_Destroy(pUsbApp->pInEpDma[endpNum]);
+            pUsbApp->pInEpDma[endpNum] = NULL;
+        }
+    }
+    
+    if ((endpNum > 0 &&  endpNum <= CY_USB_NUM_ENDP_CONFIGURED) && (endpDir == 0))
+    {
+        /* Stop and destroy the high bandwidth DMA channel if present. To be done before AppInit is called. */
+        if (pUsbApp->pOutEpDma[endpNum] != NULL)
+        {
+            DBG_APP_TRACE("Destroying EP OUT HBDMA channel \r\n");
+            Cy_HBDma_Channel_Reset(pUsbApp->pOutEpDma[endpNum]);
+            Cy_HBDma_Channel_Disable(pUsbApp->pOutEpDma[endpNum]);
+            Cy_HBDma_Channel_Destroy(pUsbApp->pOutEpDma[endpNum]);
+            pUsbApp->pOutEpDma[endpNum] = NULL;
+        }
+    }
+
+    Cy_USBD_FlushEndp(pUsbApp->pUsbdCtxt, endpNum,
+                      endpDir ? (CY_USB_ENDP_DIR_IN):(CY_USB_ENDP_DIR_OUT));
+    Cy_USBD_ResetEndp(pUsbApp->pUsbdCtxt, endpNum,
+                      endpDir ? (CY_USB_ENDP_DIR_IN):(CY_USB_ENDP_DIR_OUT), false);
+    Cy_USB_USBD_EndpSetClearStall(pUsbApp->pUsbdCtxt, (cy_en_usb_endp_dir_t)endpNum, 
+                      endpDir ? (CY_USB_ENDP_DIR_IN):(CY_USB_ENDP_DIR_OUT), false);
+    Cy_USBD_EnableEndp(pUsbApp->pUsbdCtxt, endpNum,
+                       endpDir ? (CY_USB_ENDP_DIR_IN):(CY_USB_ENDP_DIR_OUT),
+                       false); 
+                                    
+   Cy_USB_AppInitCpuDmaIntr(endpNum, endpDir ? (CY_USB_ENDP_DIR_IN):(CY_USB_ENDP_DIR_OUT),NULL);
+    return;
+}   /* end of function() */
+
+
+/**
+ * \name Cy_USB_AppHandleSetCfgCommon
+ * \brief Function handles common portion of set configuration call back to application.
+ * \param pAppCtxt application layer context pointer.
+ * \param pUsbdCtxt USBD layer  context pointer.
+ * \param pMsg pointer to message coming from lower layer.
+ * \retval  CY_USB_APP_STATUS_SUCCESS in case of set Config handle without error.
+ *          CY_USB_APP_STATUS_FAILURE in all other case.
+ */
+static cy_en_usb_app_ret_code_t
+Cy_USB_AppHandleSetCfgCommon (cy_stc_usb_app_ctxt_t *pAppCtxt,
+                              cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
+                              cy_stc_usb_cal_msg_t *pMsg)
+{
+    cy_stc_usb_setup_req_t *pSetupReq;
+    cy_en_usb_speed_t devSpeed;
+    uint8_t *pActiveCfg, *pIntfDscr, *pEndpDscr;
+    uint8_t index, numOfIntf, numOfEndp;
+
+    DBG_APP_TRACE("USB: Set config common \r\n");
+
+    devSpeed = Cy_USBD_GetDeviceSpeed(pUsbdCtxt);
+
+    pAppCtxt->devSpeed = devSpeed;
+
+    /* Get setup packet from message. */
+    pSetupReq = (cy_stc_usb_setup_req_t *)(&(pMsg->data[0]));
+    /* Disable DMA if Set Config request on Config index 0 is received */
+    if(pSetupReq->wValue == 0) {
+        DBG_APP_ERR("USB: Set CFG 0\r\n");
+        return CY_USB_APP_STATUS_FAILURE;
+    }
+
+    /* Enable Datawire. This application uses data wire for data transfer. */
+    Cy_DMA_Enable(pAppCtxt->pCpuDw0Base);
+    Cy_DMA_Enable(pAppCtxt->pCpuDw1Base);
+
+    pActiveCfg = Cy_USB_USBD_GetActiveCfgDscr(pUsbdCtxt);
+    if (!pActiveCfg) {
+        /* Set config should be called when active config value > 0x00. */
+        DBG_APP_ERR("USB: Active config not available\r\n");
+        return CY_USB_APP_STATUS_FAILURE;
+    }
+
+    numOfIntf = Cy_USBD_FindNumOfIntf(pActiveCfg);
+    if (numOfIntf == 0x00) {
+        DBG_APP_ERR("USB: No. of intf-0x00\r\n");
+        return CY_USB_APP_STATUS_FAILURE;
+    }
+
+    for (index = 0x00; index < numOfIntf; index++) {
+        /* During Set Config command always altSetting 0 will be active. */
+        pIntfDscr = Cy_USBD_GetIntfDscr(pUsbdCtxt, index, 0x00);
+        if (pIntfDscr == NULL) {
+            DBG_APP_ERR("USB: NULL intf dscr\r\n");
+            return CY_USB_APP_STATUS_FAILURE;
+        }
+
+        numOfEndp = Cy_USBD_FindNumOfEndp(pIntfDscr);
+        if (numOfEndp == 0x00) {
+            /* If current interface has 0 endpoint then move to next intf */
+            DBG_APP_ERR("USB: No. of endpoint-0x00\r\n");
+            continue;
+        }
+
+        pEndpDscr = Cy_USBD_GetEndpDscr(pUsbdCtxt, pIntfDscr);
+        while (numOfEndp != 0x00) {
+            /* first cleanup all channels related info then configure new. */
+            Cy_USB_AppDestroyEndpDmaParamsHs(pAppCtxt, pEndpDscr);
+            Cy_USB_AppSetupEndpDmaParamsHs(pAppCtxt, pEndpDscr);
+            numOfEndp--;
+
+            pEndpDscr = (pEndpDscr + (*(pEndpDscr + CY_USB_DSCR_OFFSET_LEN)));
+            
+        }
+    }
+    
+    DBG_APP_TRACE("USB: All endpoints configured\r\n");
+
+    pAppCtxt->prevDevState = CY_USB_DEVICE_STATE_CONFIGURED;
+    pAppCtxt->devState = CY_USB_DEVICE_STATE_CONFIGURED;
+
+    return CY_USB_APP_STATUS_SUCCESS;
+}   /* end of function. */
 
 /**
  * \name Cy_USB_AppInit
@@ -74,7 +388,6 @@ Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt,
     pAppCtxt->devState = CY_USB_DEVICE_STATE_DISABLE;
     pAppCtxt->prevDevState = CY_USB_DEVICE_STATE_DISABLE;
 
-    DBG_APP_INFO("Cy_USB_AppInit\r\n");
     /*
      * Initially application sees device speed as USBFS and during set
      * configuration application will update actual device speed.
@@ -85,7 +398,7 @@ Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt,
     pAppCtxt->currentAltSetting = 0x00;
     pAppCtxt->enumMethod = CY_USB_ENUM_METHOD_FAST;
 
-    for (index = 0x01; index < CY_USB_NUM_ENDP_CONFIGURED; index++) {
+    for (index = 0x01; index <= CY_USB_NUM_ENDP_CONFIGURED; index++) {
         pEndpInDma = &(pAppCtxt->endpInDma[index]);
 
         memset((void *)pEndpInDma, 0, sizeof(cy_stc_app_endp_dma_set_t));
@@ -114,35 +427,28 @@ Cy_USB_AppInit (cy_stc_usb_app_ctxt_t *pAppCtxt,
     Cy_USB_AppRegisterCallback(pAppCtxt);
 
     if (!(pAppCtxt->firstInitDone)) {
-        /*
-         * Initialize echo device only once and this includes creating
-         * thread and queue.
-         */
-        DBG_APP_INFO("Echo Device Init\r\n");
-        pAppCtxt->pDevFuncCtxt = Cy_USB_EchoDeviceInit(pAppCtxt);
 
         /* create queue and register it to kernel. */
         pAppCtxt->xQueue = xQueueCreate(CY_USB_ECHO_DEVIE_MSG_QUEUE_SIZE,
                                         CY_USB_ECHO_DEVIE_MSG_SIZE);
-        DBG_APP_INFO("createdEchoQueue\r\n");
+        DBG_APP_TRACE("Echo: Queue Created \r\n");
         vQueueAddToRegistry(pAppCtxt->xQueue, "EchoDeviceMsgQueue");
 
         /* Create task and check status to confirm task created properly. */
         status = xTaskCreate(Cy_USB_EchoDeviceTaskHandler, "EchoDeviceTask", 2048,
                         (void *)pAppCtxt, 5, &(pAppCtxt->echoDevicetaskHandle));
         if (status != pdPASS) {
-            DBG_APP_ERR("TaskcreateFail\r\n");
+            DBG_APP_ERR("Echo: Task create fail\r\n");
             return;
         }
 
         pAppCtxt->vbusDebounceTimer = xTimerCreate("VbusDebounceTimer", 200, pdFALSE,
                 (void *)pAppCtxt, Cy_USB_VbusDebounceTimerCallback);
         if (pAppCtxt->vbusDebounceTimer == NULL) {
-            DBG_APP_ERR("TimerCreateFail\r\n");
+            DBG_APP_ERR("USB: Timer Create Fail\r\n");
             return;
         }
-        DBG_APP_INFO("VBus debounce timer created\r\n");
-
+        DBG_APP_TRACE("USB: VBus debounce timer created\r\n");
         pAppCtxt->firstInitDone = 0x01;
         
     }
@@ -191,42 +497,6 @@ Cy_USB_AppRegisterCallback (cy_stc_usb_app_ctxt_t *pAppCtxt)
     return;
 }   /* end of function. */
 
-/**
- * \name Cy_USB_AppInitEndpCpuDmaDscrConfig
- * \brief This function initializes DMA descriptor for endpoint 0 IN transfer.
- * \param pEndpCpuDmaDscrConfig Endpoint DMa descriptor configuration pointer
- * \param pSrcAddr data source address
- * \param pDstAddr data destination address
- * \param endpSize Endpoint size
- * \param endpDirection Endpoint direction
- * \retval None
- */
-void 
-Cy_USB_AppInitEndpCpuDmaDscrConfig (
-                      cy_stc_dma_descriptor_config_t *pEndpCpuDmaDscrConfig,
-                      uint32_t *pSrcAddr, uint32_t *pDstAddr, uint32_t endpSize,
-                      cy_en_usb_endp_dir_t endpDirection)
-{
-    pEndpCpuDmaDscrConfig->retrigger = CY_DMA_WAIT_FOR_REACT;
-    pEndpCpuDmaDscrConfig->interruptType = CY_DMA_DESCR_CHAIN;
-    pEndpCpuDmaDscrConfig->triggerOutType = CY_DMA_DESCR_CHAIN;
-    pEndpCpuDmaDscrConfig->triggerInType = CY_DMA_DESCR_CHAIN;
-    pEndpCpuDmaDscrConfig->dataSize = CY_DMA_WORD;
-    pEndpCpuDmaDscrConfig->srcTransferSize = CY_DMA_TRANSFER_SIZE_DATA;
-    pEndpCpuDmaDscrConfig->dstTransferSize = CY_DMA_TRANSFER_SIZE_DATA;
-    pEndpCpuDmaDscrConfig->descriptorType = CY_DMA_1D_TRANSFER;
-    pEndpCpuDmaDscrConfig->srcAddress = pSrcAddr;
-    pEndpCpuDmaDscrConfig->dstAddress = pDstAddr;
-    pEndpCpuDmaDscrConfig->srcXincrement = 1;
-    pEndpCpuDmaDscrConfig->dstXincrement = 1;
-    pEndpCpuDmaDscrConfig->xCount = (endpSize >> 2U);   /* Reduce to number of words. */
-    pEndpCpuDmaDscrConfig->srcYincrement = 0; /* Not required for 1D transfer. */
-    pEndpCpuDmaDscrConfig->dstYincrement = 0; /* Not required for 1D transfer. */
-    pEndpCpuDmaDscrConfig->yCount = 0;        /* For 1D transfer we dont need this. */
-    pEndpCpuDmaDscrConfig->nextDescriptor = NULL;
-    pEndpCpuDmaDscrConfig->channelState = CY_DMA_CHANNEL_DISABLED;
-    return;
-}   /* End of function  */
 
 /**
  * \name Cy_USB_AppSetupEndpDmaParamsHs
@@ -240,190 +510,123 @@ void
 Cy_USB_AppSetupEndpDmaParamsHs (cy_stc_usb_app_ctxt_t *pUsbApp,
                                 uint8_t *pEndpDscr)
 {
-    DW_Type *pDW;
-    cy_stc_app_endp_dma_set_t *pEndpDmaSet;
-    uint32_t endpNum, channelNum;
+    uint32_t endpNum;
     uint16_t maxPktSize = 0x00;
-    bool stat;
-    cy_en_usb_endp_dir_t endpDir;
+    uint32_t  endpDir;
+    cy_stc_hbdma_chn_config_t dmaConfig;
+    cy_en_hbdma_mgr_status_t mgrStat;
 
-    DBG_APP_TRACE("Cy_USB_AppSetupEndpDmaParamsHs >> \r\n");
+    DBG_APP_TRACE("USB: Setup Dma Params \r\n");
 
     /* Configure endpoint in USB-IP */
     Cy_USB_AppConfigureEndp(pUsbApp->pUsbdCtxt, pEndpDscr);
+    
+    Cy_USBD_GetEndpNumMaxPktDir(pEndpDscr, &endpNum, &maxPktSize, &endpDir);
 
-    endpNum = ((*(pEndpDscr+CY_USB_ENDP_DSCR_OFFSET_ADDRESS)) & 0x7F);
-    Cy_USBD_GetEndpMaxPktSize(pEndpDscr, &maxPktSize);
+    if ((endpNum > 0 &&  endpNum <= CY_USB_NUM_ENDP_CONFIGURED) && (endpDir != 0)) {
+        
+         if (pUsbApp->pInEpDma[endpNum] != NULL) {
+            DBG_APP_ERR("USB: IN channel already created\r\n");
+            return;
+        }
+        
+#if APP_SRC_SNK_EN
+        dmaConfig.size         = CY_USB_MAX_DATA_BUFFER_SIZE;                       /* DMA Buffer size in bytes */
+        dmaConfig.prodBufSize  = CY_USB_MAX_DATA_BUFFER_SIZE;                       /* DMA Buffer Count */
+ #else
+        dmaConfig.size         = maxPktSize;                                        /* DMA Buffer size in bytes */
+        dmaConfig.prodBufSize  = maxPktSize;                                        /* DMA Buffer Count */
+ #endif /* APP_SRC_SNK_EN */
+ 
+        dmaConfig.count        = CY_IFX_ECHO_MAX_QUEUE_SIZE;        
+        dmaConfig.prodHdrSize  = 0;                                                 /* No header being added. */
+        dmaConfig.eventEnable  = 0;
+        dmaConfig.intrEnable   = LVDSSS_LVDS_ADAPTER_DMA_SCK_INTR_CONSUME_EVENT_Msk;
+        dmaConfig.bufferMode   = false;                                             /* DMA buffer mode disabled */
+        dmaConfig.chType       = CY_HBDMA_TYPE_MEM_TO_IP;                           /* DMA Channel type: from MEM to USB EG IP. */
+        dmaConfig.prodSckCount = 1;                                                 /* No. of producer sockets */
+        dmaConfig.prodSck[0]   = CY_HBDMA_VIRT_SOCKET_WR;
+        dmaConfig.prodSck[1]   = (cy_hbdma_socket_id_t)0;                           /* Producer Socket ID: None */
+        dmaConfig.consSckCount = 1;                                                 /* No. of consumer Sockets */
+        dmaConfig.consSck[1]   = (cy_hbdma_socket_id_t)0;                           /* Consumer Socket ID: None */
+        dmaConfig.cb           = HbDma_Cb;                                          /* HB-DMA callback */
+        dmaConfig.userCtx      = (void *)(pUsbApp);                                 /* Pass the application context as user context. */
+        dmaConfig.consSck[0]    = (cy_hbdma_socket_id_t)(CY_HBDMA_USBHS_IN_EP_00 + endpNum);
+        dmaConfig.usbMaxPktSize = maxPktSize;
 
-    channelNum = endpNum;
-    if (*(pEndpDscr + CY_USB_ENDP_DSCR_OFFSET_ADDRESS) & CY_USBD_ENDP_DIR_MASK) {
-        endpDir = CY_USB_ENDP_DIR_IN;
-        pEndpDmaSet   = &(pUsbApp->endpInDma[endpNum]);
-        pDW           = pUsbApp->pCpuDw1Base;
-    } else {
-        endpDir = CY_USB_ENDP_DIR_OUT;
-        pEndpDmaSet   = &(pUsbApp->endpOutDma[endpNum]);
-        pDW           = pUsbApp->pCpuDw0Base;
+
+        mgrStat = Cy_HBDma_Channel_Create(pUsbApp->pUsbdCtxt->pHBDmaMgr,
+                &(pUsbApp->endpInDma[endpNum].hbDmaChannel),
+                &dmaConfig);
+        if (mgrStat != CY_HBDMA_MGR_SUCCESS) {
+            DBG_APP_ERR("USB: IN channel create failed for Ep 0x%x status 0x%x\r\n",endpNum, mgrStat);
+            return;
+        }
+        else {
+            DBG_APP_TRACE("USB: IN channel create for Ep 0x%x\r\n",endpNum);
+        
+        }
+        
+        /* Store the pointer to the DMA channel. */
+        pUsbApp->pInEpDma[endpNum] = &(pUsbApp->endpInDma[endpNum].hbDmaChannel);
+        
+        Cy_USB_AppInitCpuDmaIntr(endpNum, CY_USB_ENDP_DIR_IN,GetEPInDmaIsr(endpNum));
+        
+    }
+    
+    if ((endpNum > 0 &&  endpNum <= CY_USB_NUM_ENDP_CONFIGURED) && (endpDir == 0)) 
+    {
+        
+         if (pUsbApp->pOutEpDma[endpNum] != NULL) {
+            DBG_APP_ERR("USB: OUT channel already created\r\n");
+            return;
+        }
+
+#if APP_SRC_SNK_EN
+        dmaConfig.size         = CY_USB_MAX_DATA_BUFFER_SIZE;                       /* DMA Buffer size in bytes */
+        dmaConfig.prodBufSize  = CY_USB_MAX_DATA_BUFFER_SIZE;                       /* DMA Buffer Count */
+ #else
+        dmaConfig.size         = maxPktSize;                                        /* DMA Buffer size in bytes */
+        dmaConfig.prodBufSize  = maxPktSize;                                        /* DMA Buffer Count */
+ #endif /* APP_SRC_SNK_EN */
+ 
+        dmaConfig.count        = CY_IFX_ECHO_MAX_QUEUE_SIZE;
+        dmaConfig.prodHdrSize  = 0;                                                 /* No header being added. */
+        dmaConfig.eventEnable  = 0;
+        dmaConfig.intrEnable   = LVDSSS_LVDS_ADAPTER_DMA_SCK_INTR_PRODUCE_EVENT_Msk;
+        dmaConfig.bufferMode   = false;                                             /* DMA buffer mode disabled */
+        dmaConfig.chType       = CY_HBDMA_TYPE_IP_TO_MEM;                           /* DMA Channel type: from MEM to USB EG IP. */
+        dmaConfig.prodSckCount = 1;                                                 /* No. of producer sockets */
+        dmaConfig.prodSck[0]   = (cy_hbdma_socket_id_t)(CY_HBDMA_USBHS_OUT_EP_00 + endpNum);;
+        dmaConfig.prodSck[1]   = (cy_hbdma_socket_id_t)0;                           /* Producer Socket ID: None */
+        dmaConfig.consSckCount = 1;                                                 /* No. of consumer Sockets */
+        dmaConfig.consSck[1]   = (cy_hbdma_socket_id_t)0;                           /* Consumer Socket ID: None */
+        dmaConfig.cb           = HbDma_Cb;                                          /* HB-DMA callback */
+        dmaConfig.userCtx      = (void *)(pUsbApp);                                 /* Pass the application context as user context. */
+        dmaConfig.consSck[0]    = CY_HBDMA_VIRT_SOCKET_WR;
+        dmaConfig.usbMaxPktSize = maxPktSize;
+
+
+        mgrStat = Cy_HBDma_Channel_Create(pUsbApp->pUsbdCtxt->pHBDmaMgr,
+                &(pUsbApp->endpOutDma[endpNum].hbDmaChannel),
+                &dmaConfig);
+        if (mgrStat != CY_HBDMA_MGR_SUCCESS) {
+            DBG_APP_ERR("USB: OUT channel create failed for Ep 0x%x status 0x%x\r\n",endpNum, mgrStat);
+            return;
+        }
+        else {
+            DBG_APP_TRACE("USB: OUT channel create for Ep 0x%x\r\n",endpNum);
+        }
+        
+        /* Store the pointer to the DMA channel. */
+        pUsbApp->pOutEpDma[endpNum] = &(pUsbApp->endpOutDma[endpNum].hbDmaChannel);
+        
+        Cy_USB_AppInitCpuDmaIntr(endpNum, CY_USB_ENDP_DIR_OUT,GetEPOutDmaIsr(endpNum));
+        
     }
 
-    stat = Cy_USBHS_App_EnableEpDmaSet(pEndpDmaSet, pDW, channelNum,
-                                       endpNum, endpDir, maxPktSize);
-    DBG_APP_TRACE("Enable EPDmaSet: endp=%x dir=%x stat=%x\r\n",
-                  endpNum, endpDir, stat);
-
-    pEndpDmaSet->endpType = (cy_en_usb_endp_type_t)
-                    ((*(pEndpDscr + CY_USB_ENDP_DSCR_OFFSET_ATTRIBUTE)) & 0x03);
-
-    /* Make the ISR registration and trigger connections from EPM to DMAC. */
-    if (endpDir == CY_USB_ENDP_DIR_IN) {
-        DBG_APP_TRACE("DIR-IN, ChannelNum:0x%x\r\n",pEndpDmaSet->channel);
-        Cy_USB_AppInitCpuDmaIntr(endpNum, CY_USB_ENDP_DIR_IN,
-                                 GetEPInDmaIsr(endpNum));
-    } else {
-        DBG_APP_TRACE("DIR-OUT, ChannelNum:0x%x\r\n",pEndpDmaSet->channel);
-        Cy_USB_AppInitCpuDmaIntr(endpNum, CY_USB_ENDP_DIR_OUT,
-                                 GetEPOutDmaIsr(endpNum));
-    }
-
-    DBG_APP_TRACE("Cy_USB_AppSetupEndpDmaParamsHs << \r\n");
     return;
 }   /* end of function  */
-
-/**
- * \name Cy_USB_AppQueueRead
- * \brief Function to queue read operation on an OUT endpoint.
- * \param pAppCtxt application layer context pointer.
- * \param endpNum endpoint number.
- * \param endpDir endpoint direction
- * \param pBuffer pointer to buffer where data will be stored.
- * \param dataSize expected data size.
- * \retval None
- */
-void
-Cy_USB_AppQueueRead (cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNum,
-                     uint8_t *pBuffer, uint16_t dataSize)
-{
-    cy_stc_app_endp_dma_set_t      *pEndpDmaSet;
-
-    DBG_APP_TRACE("Cy_USB_AppQueueRead >>\r\n");
-    DBG_APP_TRACE("pBuffer:0x%x \r\n",pBuffer);
-
-    /* Null pointer checks. */
-    if ((pAppCtxt == NULL) || (pAppCtxt->pUsbdCtxt == NULL) ||
-       (pAppCtxt->pCpuDw0Base == NULL) || (pBuffer == NULL) ||
-       (dataSize == 0)) {
-
-        DBG_APP_ERR("QueueRead: BadParam NULL\r\n");
-        return;
-    }
-
-    pEndpDmaSet  = &(pAppCtxt->endpOutDma[endpNum]);
-    /* If endpoint not valid then dont go ahead. */
-    if (pEndpDmaSet->valid == 0) {
-        DBG_APP_ERR("QueueRead: EndpSetNotValid\r\n");
-        return;
-    }
-
-    /* USB HS-FS data recieve case */
-    DBG_APP_TRACE("CALLING Cy_USBHS_App_QueueRead\r\n");
-    Cy_USBHS_App_QueueRead(pEndpDmaSet, pBuffer, dataSize);
-    /* Update xfer count and then disable NAK for the endpoint. */
-    Cy_USBD_UpdateXferCount(pAppCtxt->pUsbdCtxt, endpNum,
-                            CY_USB_ENDP_DIR_OUT, dataSize);
-    /*
-        * When device not ready then it will enable NAK.
-        * Now device is ready to recieve data so disable NAK.
-        */
-    Cy_USB_USBD_EndpSetClearNakNrdy(pAppCtxt->pUsbdCtxt, endpNum,
-                                    CY_USB_ENDP_DIR_OUT, false);
-    
-
-    pEndpDmaSet->firstRqtDone = true;
-    DBG_APP_TRACE("Cy_USB_AppQueueRead << \r\n");
-    return;
-
-} /* end of function */
-
-
-/**
- * \name Cy_USB_AppReadShortPacket
- * \brief   Function to modify an ongoing DMA read operation to take care of a short
- *          packet.
- * \param pAppCtxt application layer context pointer.
- * \param endpNum endpoint number.
- * \param pktSize Size of the short packet to be read out. Can be zero in case of ZLP.
- * \retval 0x00 or Data size.
- */
-uint16_t
-Cy_USB_AppReadShortPacket (cy_stc_usb_app_ctxt_t *pAppCtxt,
-                           uint8_t endpNum, uint16_t pktSize)
-{
-    cy_stc_app_endp_dma_set_t *pEndpDmaSet;
-    uint16_t dataSize = 0;
-
-    /* Null pointer checks. */
-    if ((pAppCtxt == NULL) || (pAppCtxt->pUsbdCtxt == NULL) ||
-        (pAppCtxt->pCpuDw0Base == NULL)) {
-        DBG_APP_ERR("ReadSLP: BadParam NULL\r\n");
-        return 0;
-    }
-
-    pEndpDmaSet  = &(pAppCtxt->endpOutDma[endpNum]);
-    /* Verify that the selected endpoint is valid. */
-    if (pEndpDmaSet->valid == 0) {
-        DBG_APP_ERR("ReadSLP: EndpSetNotValid\r\n");
-        return 0;
-    }
-
-    dataSize = Cy_USBHS_App_ReadShortPacket(pEndpDmaSet, pktSize);
-    return dataSize;
-} /* end of function */
-
-
-/**
- * \name Cy_USB_AppQueueWrite
- * \brief Function to queue write operation on an IN endpoint
- * \param pAppCtxt
- * \brief application layer context pointer.
- * \param endpNum endpoint number.
- * \param endpDir endpoint direction
- * \param pBuffer pointer to buffer where data is available.
- * \param dataSize size of data available in buffer.
- * \retval None
- */
-void
-Cy_USB_AppQueueWrite (cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNum,
-                      uint8_t *pBuffer, uint16_t dataSize)
-{
-
-    cy_stc_app_endp_dma_set_t      *pEndpDmaSet;
-
-    DBG_APP_TRACE("Cy_USB_AppQueueWrite >>\r\n");
-
-    /* Null pointer checks. */
-    if ((pAppCtxt == NULL) || (pAppCtxt->pUsbdCtxt == NULL) ||
-       (pAppCtxt->pCpuDw0Base == NULL) || (pBuffer == NULL)) {
-        DBG_APP_ERR("QueueWrite: BadParam NULL\r\n");
-        return;
-    }
-
-    pEndpDmaSet  = &(pAppCtxt->endpInDma[endpNum]);
-    /* If endpoint not valid then dont go ahead. */
-    if (pEndpDmaSet->valid == 0) {
-        DBG_APP_ERR("QueueWrite: EndpSetNotValid\r\n");
-        return;
-    }
-
-    /* In USB-HS, 0 length packet sent through USB controller */
-    if (dataSize == 0)  {
-        DBG_APP_ERR("QueueWrite:BadParam:DataSize-0\r\n");
-        return;
-    }
-
-    Cy_USBHS_App_QueueWrite(pEndpDmaSet, pBuffer, dataSize);
-     
-    DBG_APP_TRACE("Cy_USB_AppQueueWrite <<\r\n");
-} /* end of function */
 
 /*
  * Function: Cy_USB_VbusDebounceTimerCallback()
@@ -442,7 +645,7 @@ Cy_USB_VbusDebounceTimerCallback (TimerHandle_t xTimer)
 
 
     if (pAppCtxt->vbusChangeIntr) {
-        DBG_APP_INFO("VbusDebounce_CB\r\n");
+        DBG_APP_INFO("USB: Vbus Debounce CB\r\n");
         /* Notify the task that VBus debounce is complete. */
         xMsg.type = CY_USB_VBUS_CHANGE_DEBOUNCED;
         xQueueSendFromISR(pAppCtxt->xQueue, &(xMsg), &(xHigherPriorityTaskWoken));
@@ -469,15 +672,14 @@ Cy_USB_RecvEndp0TimerCallback (TimerHandle_t xTimer)
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     cy_stc_usbd_app_msg_t xMsg;
 
-    DBG_APP_INFO("TIMER CALLBACK called!!\r\n");
+    DBG_APP_INFO("USB: EP0 Receive CB\r\n");
     /* retrieve pAppCtxt and post message to echo device */
     pAppCtxt = ( cy_stc_usb_app_ctxt_t *)pvTimerGetTimerID(xTimer);
 
     xMsg.type = CY_USB_ENDP0_READ_TIMEOUT;
     status = xQueueSendFromISR(pAppCtxt->xQueue, &(xMsg), &(xHigherPriorityTaskWoken));
-    if (status != pdPASS) {
-        DBG_APP_INFO("AppMsgSETUPSndFail\r\n");
-    }
+    (void)status;
+    
     return;
 }
 
@@ -501,7 +703,7 @@ Cy_USB_AppSetCfgCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     BaseType_t status;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-    DBG_APP_TRACE("Cy_USB_AppSetCfgCallback >>\r\n");
+    DBG_APP_TRACE("USB: Set Configuration CB \r\n");
 
     pUsbApp = (cy_stc_usb_app_ctxt_t *)pAppCtxt;
     devSpeed = Cy_USBD_GetDeviceSpeed(pUsbdCtxt);
@@ -511,49 +713,34 @@ Cy_USB_AppSetCfgCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 
     retCode = Cy_USB_AppHandleSetCfgCommon(pUsbApp, pUsbdCtxt, pMsg);
     if (retCode == CY_USB_APP_STATUS_FAILURE) {
-        DBG_APP_TRACE("Cy_USB_ApphandleSetCfgCommon Failed\r\n");
+        DBG_APP_TRACE("USB: Set Cfg Common Failed status %x\r\n",retCode);
         return;
     }
-    /* specific to src-snk and loopback function. */
-    Cy_DevSpeedBasedfxQueueUpdate(pAppCtxt, devSpeed);
 
     /* Set timer expiry to 5 second*/
     pUsbApp->endp0OuttimerExpiry = 5000;
     /* Create timer with 5Sec Expiry and recurring = FALSE. */
     pUsbApp->endp0OutTimerHandle =
         xTimerCreate("Endp0OutTimer", pUsbApp->endp0OuttimerExpiry, pdFALSE,
-                     (void *)pUsbApp, Cy_USB_RecvEndp0TimerCallback);
+                     (void *)pUsbApp, Cy_USB_RecvEndp0TimerCallback);  
     /*
      * first send message to configure channel and then transfer data.
      * can be optimized with single message later.
      */
-
-    DBG_APP_TRACE("send CY_USB_ECHO_DEVICE_MSG_SETUP_DATA_XFER\r\n");
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_SETUP_DATA_XFER;
 
     status = xQueueSendFromISR(pUsbApp->xQueue, &(xMsg), &(xHigherPriorityTaskWoken));
     if (status != pdPASS) {
-        DBG_APP_ERR("AppMsgSETUPSndFail\r\n");
+        DBG_APP_ERR("USB: Message sent fail\r\n");
     }
 
-    DBG_APP_TRACE("send CY_USB_ECHO_DEVICE_MSG_START_DATA_XFER\r\n");
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_START_DATA_XFER;
 
     status = xQueueSendFromISR(pUsbApp->xQueue, &(xMsg), &(xHigherPriorityTaskWoken));
     if (status != pdPASS) {
-        DBG_APP_ERR("AppMsgSTARTSndFail\r\n");
+        DBG_APP_ERR("USB: Message sent fail\r\n");
     }
 
-    /*
-     * Register DMA transfer completion interrupt for OUT
-     * endpoint 0 and enable respective mask also.
-     */
-    DBG_APP_TRACE("RegisterDmaIntr for endp0-OUT\r\n");
-    Cy_USB_AppInitCpuDmaIntr(CY_USB_ENDP_0, CY_USB_ENDP_DIR_OUT,
-                             GetEPOutDmaIsr(CY_USB_ENDP_0));
-    Cy_DMAC_Channel_SetInterruptMask(pUsbApp->pCpuDmacBase,
-                                     pUsbApp->pUsbdCtxt->channel1,
-                                     CY_DMAC_INTR_COMPLETION);
 
 #if LPM_ENABLE
     /* Schedule LPM enable after 80 milliseconds. */
@@ -562,13 +749,11 @@ Cy_USB_AppSetCfgCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     DBG_APP_INFO("Enabling LPM transitions\r\n");
 
 #else
-    DBG_APP_INFO("Disabling LPM transitions\r\n");
+    DBG_APP_INFO("USB: Disabling LPM transitions\r\n");
     pUsbApp->lpmEnableTime = 0;
     Cy_USBD_LpmDisable(pUsbApp->pUsbdCtxt);
 #endif /* LPM_ENABLE */
 
-
-    DBG_APP_TRACE("Cy_USB_AppSetCfgCallback <<\r\n\r\n");
     return;
 }   /* end of function */
 
@@ -587,7 +772,7 @@ void Cy_USB_AppBusResetCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtx
 
     pUsbApp = (cy_stc_usb_app_ctxt_t *)pAppCtxt;
 
-    DBG_APP_TRACE("ResetCallback >>\r\n");
+    DBG_APP_TRACE("USB: Reset CB\r\n");
     
     /*
      * USBD layer takes care of reseting its own data structure as well as
@@ -599,7 +784,6 @@ void Cy_USB_AppBusResetCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtx
     pUsbApp->devState = CY_USB_DEVICE_STATE_RESET;
     pUsbApp->prevDevState = CY_USB_DEVICE_STATE_RESET;
 
-    DBG_APP_TRACE("ResetCallback <<\r\n\r\n");
     return;
 }   /* end of function. */
 
@@ -661,7 +845,7 @@ Cy_USB_AppSetupCallback (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     cy_stc_usbd_app_msg_t xMsg;
     BaseType_t status;
 
-    DBG_APP_INFO("SetupCb\r\n");
+    DBG_APP_TRACE("USB: Setup CB\r\n");
     /*
      * cy_stc_usbd_app_msg_t xMsg;
      * Send message to setup and start data transfer.
@@ -737,7 +921,7 @@ void Cy_USB_AppSetIntfCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
     pUsbApp = (cy_stc_usb_app_ctxt_t *)pAppCtxt;
-    DBG_APP_TRACE("Cy_USB_AppSetIntfCallback >> \r\n");
+    DBG_APP_TRACE("USB: Set interface CB \r\n");
 
     pSetupReq = &(pUsbdCtxt->setupReq);
     /*
@@ -749,7 +933,7 @@ void Cy_USB_AppSetIntfCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
     intfNum = pSetupReq->wIndex;
     newAltSetting = pSetupReq->wValue;
 
-    DBG_APP_INFO("Intf:%d currAltSet:%d NewAltSet:%d, \r\n", intfNum,
+    DBG_APP_INFO("USB: Intf:%d currAltSet:%d NewAltSet:%d, \r\n", intfNum,
                  pUsbApp->currentAltSetting, newAltSetting);
 
     numOfAltSetting = Cy_USBD_GetNumOfAltSetting(pUsbdCtxt, intfNum);
@@ -759,18 +943,17 @@ void Cy_USB_AppSetIntfCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
              * Set interface request for same alt setting and only default is
              * available then send stall.
              */
-            DBG_APP_INFO("SetIntf:SameAltSetting and only default so send STALL\r\n");
+            DBG_APP_INFO("USB:SameAltSetting and only default so send STALL\r\n");
             Cy_USB_USBD_EndpSetClearStall(pUsbdCtxt, 0x00,
                                           CY_USB_ENDP_DIR_IN, TRUE);
         }
-        DBG_APP_TRACE("Cy_USB_AppSetIntfCallback << \r\n\r\n");
         return;
     }
 
     /* New altSetting is different than previous one so unconfigure previous. */
     pIntfDscr = Cy_USBD_GetIntfDscr(pUsbdCtxt, intfNum, pUsbApp->currentAltSetting);
     if (pIntfDscr == NULL) {
-        DBG_APP_ERR("pIntfDscr-Null\r\n");
+        DBG_APP_ERR("USB: IntfDscr-Null\r\n");
         return;
     }
 
@@ -781,13 +964,12 @@ void Cy_USB_AppSetIntfCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
 
     /* Now unconfigure things related to previous altSetting*/
     numOfEndp = Cy_USBD_FindNumOfEndp(pIntfDscr);
-    DBG_APP_INFO("NumOfEndp=%d in CurrIntf\r\n",numOfEndp);
     if (numOfEndp == 0x00) {
         /*
          * If previous interface does not have endpoint so no need to
          * unconfigure it. Just move to new setting.
          */
-        DBG_APP_INFO("SetIntf:prevIntNumEp=0\r\n");
+        DBG_APP_TRACE("USB:prevIntNumEp=0\r\n");
     } else {
         pEndpDscr = Cy_USBD_GetEndpDscr(pUsbdCtxt, pIntfDscr);
 
@@ -800,27 +982,27 @@ void Cy_USB_AppSetIntfCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
         }   /* End of while */
     }
 
-    DBG_APP_INFO("Prev AltSet Unconfigured....... \r\n");
+    DBG_APP_INFO("USB: Prev AltSet Unconfigured....\r\n");
 
     /* Now take care of different config with new alt setting. */
-    DBG_APP_INFO("New AltSet ConfigStarts........ \r\n");
+    DBG_APP_INFO("USB: New AltSet ConfigStarts...\r\n");
     pUsbApp->currentAltSetting = newAltSetting;
     pIntfDscr = Cy_USBD_GetIntfDscr(pUsbdCtxt, intfNum, newAltSetting);
     if (pIntfDscr == NULL) {
-        DBG_APP_INFO("SetIntf:pIntfDscrNull\r\n");
+        DBG_APP_ERR("USB::pIntfDscrNull\r\n");
         return;
     }
 
     numOfEndp = Cy_USBD_FindNumOfEndp(pIntfDscr);
-    DBG_APP_TRACE("New AltSet ConfigStarts........ ep %d\r\n",numOfEndp);
+    DBG_APP_TRACE("USB: New AltSet ConfigStarts for ep %d\r\n",numOfEndp);
     pUsbApp->intfAltSetEndp[intfNum][newAltSetting] = numOfEndp;
     if (numOfEndp == 0x00) {
-        DBG_APP_INFO("SetIntf:numEp 0\r\n");
+        DBG_APP_TRACE("USB:numEp 0\r\n");
     } else {
         pUsbApp->currentAltSetting = newAltSetting;
         pEndpDscr = Cy_USBD_GetEndpDscr(pUsbdCtxt, pIntfDscr);
         while (numOfEndp != 0x00) {
-           // Cy_USB_AppConfigureEndp(pUsbdCtxt, pEndpDscr);
+            
             Cy_USB_AppSetupEndpDmaParamsHs(pAppCtxt, pEndpDscr);
             numOfEndp--;
 
@@ -841,7 +1023,6 @@ void Cy_USB_AppSetIntfCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
                                &(xHigherPriorityTaskWoken));
     (void)status;
 
-    DBG_APP_TRACE("Cy_USB_AppSetIntfCallback << \r\n\r\n");
     return;
 }   /* end of function. */
 
@@ -859,26 +1040,13 @@ Cy_USB_AppZlpCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 {
     cy_stc_usb_app_ctxt_t *pAppCtxt;
     BaseType_t status;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    cy_stc_usbd_app_msg_t xMsg;
-
-    /*
-     * Get cal MSG.
-     * Convert CAL msg to usbd/app message.
-     * send it through queue.
-     */
+    DBG_APP_TRACE("USB: ZLP CB\r\n");
+    
     pAppCtxt = (cy_stc_usb_app_ctxt_t *)pUsbApp;
-
-    if (pMsg->type == CY_USB_CAL_MSG_OUT_ZLP) {
-        xMsg.type = CY_USB_ECHO_DEVICE_MSG_ZLP_OUT;
-    } else {
-        xMsg.type = CY_USB_ECHO_DEVICE_MSG_ZLP_IN;
+    if(pMsg->type == CY_USB_CAL_MSG_OUT_ZLP)
+    {
+        Cy_HBDma_Mgr_HandleUsbShortInterrupt(pAppCtxt->pHbDmaMgrCtxt, (pMsg->data[0] & 0x7FU), pMsg->data[1]);
     }
-    /* Just make sure data also copied which contains endp addr and dir. */
-    xMsg.data[0] = pMsg->data[0];
-    xMsg.data[1] = pMsg->data[1];
-    status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
-                               &(xHigherPriorityTaskWoken));
 
     (void)status;
 
@@ -902,7 +1070,7 @@ Cy_USB_AppL1SleepCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     cy_stc_usbd_app_msg_t xMsg;
 
-    DBG_APP_TRACE("AppL1SleepCb\r\n");
+    DBG_APP_TRACE("USB: L2 Sleep CB\r\n");
     pAppCtxt = (cy_stc_usb_app_ctxt_t *)pUsbApp;
 
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_L1_SLEEP;
@@ -932,7 +1100,7 @@ Cy_USB_AppL1ResumeCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     cy_stc_usbd_app_msg_t xMsg;
 
-    DBG_APP_TRACE("AppL1ResumeCb\r\n");
+    DBG_APP_TRACE("USB: L1 Resume CB\r\n");
     pAppCtxt = (cy_stc_usb_app_ctxt_t *)pUsbApp;
 
     xMsg.type = CY_USB_ECHO_DEVICE_MSG_L1_RESUME;
@@ -959,179 +1127,15 @@ Cy_USB_AppSlpCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 {
     cy_stc_usb_app_ctxt_t *pAppCtxt;
     BaseType_t status;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    cy_stc_usbd_app_msg_t xMsg;
 
-    DBG_APP_TRACE("AppSlpCb\r\n");
+    DBG_APP_TRACE("USB: SLP CB\r\n");
 
-    /*
-     * Get cal MSG.
-     * Convert CAL msg to usbd/app message.
-     * send it through queue.
-     */
     pAppCtxt = (cy_stc_usb_app_ctxt_t *)pUsbApp;
-
-    if (pMsg->type == CY_USB_CAL_MSG_OUT_SLP) {
-        xMsg.type = CY_USB_ECHO_DEVICE_MSG_SLP_OUT;
-    } else {
-        xMsg.type = CY_USB_ECHO_DEVICE_MSG_SLP_IN;
+    if(pMsg->type == CY_USB_CAL_MSG_OUT_SLP)
+    {
+        Cy_HBDma_Mgr_HandleUsbShortInterrupt(pAppCtxt->pHbDmaMgrCtxt, (pMsg->data[0] & 0x7FU), pMsg->data[1]);
     }
-    xMsg.data[0] = pMsg->data[0];
-    xMsg.data[1] = pMsg->data[1];
-    status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
-                               &(xHigherPriorityTaskWoken));
 
     (void)status;
     return;
-}   /* end of function. */
-
-/**
- * \name Cy_USB_AppSetFeatureCallback
- * \brief Callback function will be invoked by USBD when Set Feature comes.
- * \param pAppCtxt application layer context pointer.
- * \param pUsbdCtxt USBD layer context pointer
- * \param pMsg USB Message
- * \retval None
- */
-void
-Cy_USB_AppSetFeatureCallback (void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
-                              cy_stc_usb_cal_msg_t *pMsg)
-{
-    cy_stc_usb_app_ctxt_t *pAppCtxt;
-    BaseType_t status;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    cy_stc_usbd_app_msg_t xMsg;
-
-    DBG_APP_INFO("AppSetFeatureCb\r\n");
-
-    /*
-     * Get cal MSG.
-     * Convert CAL msg to usbd/app message.
-     * send it through queue.
-     */
-    pAppCtxt = (cy_stc_usb_app_ctxt_t *)pUsbApp;
-
-    xMsg.type = CY_USB_ECHO_DEVICE_SET_FEATURE;
-    xMsg.data[0] = pMsg->data[0];
-    xMsg.data[1] = pMsg->data[1];
-    status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
-                               &(xHigherPriorityTaskWoken));
-
-    (void)status;
-    return;
-}   /* end of function. */
-
-/**
- * \name Cy_USB_AppClearFeatureCallback
- * \brief Callback function will be invoked by USBD when clear Feature comes.
- * \param pAppCtxt application layer context pointer.
- * \param pUsbdCtxt USBD layer context pointer
- * \param pMsg USB Message
- * \retval None
- */
-void
-Cy_USB_AppClearFeatureCallback (void *pUsbApp,
-                                cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
-                                cy_stc_usb_cal_msg_t *pMsg)
-{
-    cy_stc_usb_app_ctxt_t *pAppCtxt;
-    BaseType_t status;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    cy_stc_usbd_app_msg_t xMsg;
-
-    DBG_APP_INFO("AppClearFeatureCb\r\n");
-
-    /*
-     * Get cal MSG.
-     * Convert CAL msg to usbd/app message.
-     * send it through queue.
-     */
-    pAppCtxt = (cy_stc_usb_app_ctxt_t *)pUsbApp;
-
-    xMsg.type = CY_USB_ECHO_DEVICE_CLEAR_FEATURE;
-    xMsg.data[0] = pMsg->data[0];
-    xMsg.data[1] = pMsg->data[1];
-    status = xQueueSendFromISR(pAppCtxt->xQueue,  &(xMsg),
-                               &(xHigherPriorityTaskWoken));
-
-    (void)status;
-    return;
-}   /* end of function. */
-
-/**
- * \name Cy_USB_HandleEchoDevieReqs
- * \brief This Function handles all request related to echo device.
- * \param pAppCtxt application layer context pointer.
- * \param pUsbdCtxt USBD layer context pointer
- * \param pMsg USB Message
- * \retval None
- */
-void
-Cy_USB_HandleEchoDevieReqs (void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt)
-{
-    cy_stc_usb_setup_req_t *pSetupReq;
-    uint8_t   bmRequest, bRequest;
-    uint16_t wValue, wIndex;
-    cy_en_usb_app_ret_code_t retCode = CY_USB_APP_STATUS_FAILURE;
-
-    pSetupReq =  &(pUsbdCtxt->setupReq);
-
-    /* Decode the fields from the setup request. */
-    bmRequest = pSetupReq->bmRequest;
-    bRequest = pSetupReq->bRequest;
-
-    do {
-
-        if ((bRequest == 0xE0) && (bmRequest == 0x40)) {
-            /*
-             * Device reset request:
-             * 1. Get delay information.
-             * 2. Initiate Status stage ACK.
-             * 3. Do the reset functionality.
-             */
-            wValue = pSetupReq->wValue;
-            Cy_USBD_SendAckSetupDataStatusStage(pUsbdCtxt);
-            /* wait for wValue+1 ms  */
-            Cy_SysLib_DelayUs(((wValue+1) * 1000));
-            NVIC_SystemReset();
-            retCode = CY_USB_APP_STATUS_SUCCESS;
-            break;
-        }
-
-        if ((bRequest == 0xE1) && (bmRequest == 0x40)) {
-            /*
-             * Device re-enumeration request:
-             * 1. Get delay information (wValue) and Speed
-             *    information (wIndex).
-             * 2. Initiate Status stage ACK.
-             * 3. Set Speed and then diconnect and connect device.
-             */
-            wValue = pSetupReq->wValue;
-            wIndex = pSetupReq->wIndex;
-            Cy_USBD_SendAckSetupDataStatusStage(pUsbdCtxt);
-            Cy_SysLib_DelayUs(((wValue+1) * 1000));
-            Cy_USBD_DisconnectDevice(pUsbdCtxt);
-            Cy_SysLib_DelayUs(((wValue+1) * 1000));
-            /*
-             * Make sure wIndex value of device speed should match with
-             * cy_en_usb_speed_t
-             */
-            Cy_USBD_SetDeviceSpeed(pUsbdCtxt, (cy_en_usb_speed_t)wIndex);
-            Cy_USBD_ConnectDevice(pUsbdCtxt,(cy_en_usb_speed_t)wIndex);
-            retCode = CY_USB_APP_STATUS_SUCCESS;
-            break;
-        }
-
-        if ((bRequest == 0xF0) && (bmRequest == 0xC0)) {
-            /* Device capability request */
-            retCode = CY_USB_APP_STATUS_SUCCESS;
-            break;
-        }
-    } while(0);
-
-    if (retCode == CY_USB_APP_STATUS_FAILURE) {
-        /* If request is not handled then need to send STALL */
-        Cy_USB_USBD_EndpSetClearStall(pUsbdCtxt, 0x00,
-                                      CY_USB_ENDP_DIR_IN, TRUE);
-    }
 }   /* end of function. */
