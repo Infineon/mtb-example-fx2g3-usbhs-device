@@ -1,4 +1,4 @@
-# EZ-USB&trade; FX2G3: USBHS device application 1.0.4
+# EZ-USB&trade; FX2G3: USBHS device application 1.0.5
 
 ## What's Included?
 
@@ -6,7 +6,7 @@ Refer to the [README.md](./README.md).
 
 ## Defect Fixes
 
-* Updated to use new DataWire APIs from USBFXStack
+* Updated linker scripts used with ARM&reg; Compiler
 
 ## Supported Software and Tools
 
